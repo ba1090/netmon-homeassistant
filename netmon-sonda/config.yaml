@@ -1,0 +1,29 @@
+# netmon · add-on di Home Assistant con la sonda (la versione è quella di netmon: la aggiorna
+# tools/nuova-versione.py insieme ai programmi copiati in probe/)
+name: NetMon sonda
+version: "1.1.20261016-123657"
+slug: netmon_sonda
+description: La sonda di netmon dentro Home Assistant, al posto del Raspberry Pi
+url: https://github.com/ba1090/netmon-homeassistant/blob/main/netmon-sonda/DOCS.md
+arch:
+  - aarch64
+  - amd64
+startup: application
+boot: auto
+init: true
+# rete dell'host: ping, FRITZ!Box e pagina locale come una sonda collegata alla rete di casa
+host_network: true
+# il pulsante «Apri interfaccia web»: con la rete dell'host [PORT:8080] resta 8080 (se la pagina
+# è su un'altra porta, opzione web_port, si apre a mano)
+webui: "http://[HOST]:[PORT:8080]/"
+options:
+  server: ""
+  token: ""
+  name: Home Assistant
+  web_port: 8080
+schema:
+  server: str
+  token: password
+  name: str
+  web_password: password?
+  web_port: port

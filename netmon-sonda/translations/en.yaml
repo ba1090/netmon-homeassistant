@@ -1,0 +1,16 @@
+configuration:
+  server:
+    name: Server
+    description: Domain of the NetMon server, e.g. monitorvm.duckdns.org (https; write http:// only if the server has no HTTPS)
+  token:
+    name: Probe token
+    description: The sonda_… token created on the status page, Settings → Probes → Add a probe
+  name:
+    name: Probe name
+    description: How it appears on the status page. Applied when you change it here; a rename from the status page is kept
+  web_password:
+    name: Local page password
+    description: Optional, at least 12 characters. Without it, one is created on first start and written to the log
+  web_port:
+    name: Local page port
+    description: 8080 as on the Raspberry; change it only if another add-on already uses it (the Open web UI button always uses 8080)

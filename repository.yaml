@@ -1,0 +1,4 @@
+# Repository di add-on per Home Assistant: Impostazioni → Add-on → Archivio → ⋮ → Repository
+name: NetMon
+url: https://github.com/ba1090/netmon-homeassistant
+maintainer: NetMon

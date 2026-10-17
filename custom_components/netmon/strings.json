@@ -1,0 +1,97 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "NetMon",
+        "description": "Address of your NetMon server (the status page) and the account you sign in with. {detail}",
+        "data": {
+          "url": "Server address",
+          "email": "Email",
+          "password": "Password",
+          "verify_ssl": "Verify the HTTPS certificate"
+        },
+        "data_description": {
+          "url": "For example https://monitorvm.duckdns.org"
+        }
+      },
+      "reauth_confirm": {
+        "title": "Sign in to NetMon again",
+        "description": "The server no longer accepts the password for {email}. Enter the current one. {detail}",
+        "data": {
+          "password": "Password"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Cannot reach the server or unexpected response.",
+      "invalid_auth": "Sign-in failed: check email and password (or whether the account is blocked or expired).",
+      "unknown": "Unexpected error.",
+      "too_many_attempts": "Too many failed attempts: the server blocks sign-ins for a while."
+    },
+    "abort": {
+      "already_configured": "This NetMon account is already configured.",
+      "reauth_successful": "Sign-in updated."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "NetMon",
+        "data": {
+          "scan_interval": "Update every (seconds)"
+        }
+      }
+    }
+  },
+  "entity": {
+    "binary_sensor": {
+      "probe_online": {
+        "name": "Online"
+      },
+      "device_online": {
+        "name": "Online"
+      },
+      "fritz_internet": {
+        "name": "Internet (FRITZ!Box)"
+      }
+    },
+    "sensor": {
+      "rtt": {
+        "name": "Response time"
+      },
+      "temperature": {
+        "name": "Temperature"
+      },
+      "load1": {
+        "name": "Load (1 min)"
+      },
+      "uptime": {
+        "name": "Uptime"
+      },
+      "version": {
+        "name": "NetMon version"
+      },
+      "fritz_external_ip": {
+        "name": "Public IP"
+      },
+      "fritz_rate_down": {
+        "name": "Current download"
+      },
+      "fritz_rate_up": {
+        "name": "Current upload"
+      },
+      "fritz_hosts_active": {
+        "name": "Devices on the FRITZ!Box"
+      },
+      "speedtest_down": {
+        "name": "Speedtest download"
+      },
+      "speedtest_up": {
+        "name": "Speedtest upload"
+      },
+      "speedtest_ping": {
+        "name": "Speedtest ping"
+      }
+    }
+  }
+}

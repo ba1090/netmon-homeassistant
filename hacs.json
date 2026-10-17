@@ -1,0 +1,6 @@
+{
+  "name": "NetMon",
+  "content_in_root": false,
+  "render_readme": false,
+  "homeassistant": "2024.11.0"
+}

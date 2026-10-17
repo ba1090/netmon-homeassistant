@@ -1,0 +1,15 @@
+#!/bin/sh
+# netmon · systemctl minimo per l'add-on di Home Assistant (nel container systemd non c'è).
+# La pagina locale chiede «systemctl is-active netmon-probe» per mostrare se la sonda è in funzione:
+# risponde in base al processo avviato da addon.py. Le altre unità (aggiornamenti, Wi-Fi) qui non
+# esistono, quindi non sono mai attive; ogni altro comando non è disponibile.
+if [ "$1" = "is-active" ]; then
+    if [ "$2" = "netmon-probe" ] && [ -f /run/netmon-probe.pid ] && kill -0 "$(cat /run/netmon-probe.pid)" 2>/dev/null; then
+        echo active
+        exit 0
+    fi
+    echo inactive
+    exit 3
+fi
+echo "systemctl non disponibile nell'add-on di Home Assistant" >&2
+exit 1

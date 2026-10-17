@@ -1,0 +1,16 @@
+configuration:
+  server:
+    name: Server
+    description: Dominio del server NetMon, per esempio monitorvm.duckdns.org (https; scrivi http:// solo se il server non ha HTTPS)
+  token:
+    name: Token della sonda
+    description: Il token sonda_… creato nella pagina di stato, Impostazioni → Sonde → Aggiungi una sonda
+  name:
+    name: Nome della sonda
+    description: Come compare nella pagina di stato. Vale quando lo cambi qui; un «Rinomina» dalla pagina di stato resta
+  web_password:
+    name: Password della pagina locale
+    description: Facoltativa, almeno 12 caratteri. Senza, al primo avvio ne viene creata una e scritta nel registro
+  web_port:
+    name: Porta della pagina locale
+    description: 8080 come sul Raspberry; cambiala solo se è già occupata da un altro add-on (il pulsante Apri interfaccia web usa sempre la 8080)

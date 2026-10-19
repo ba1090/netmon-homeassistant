@@ -18,7 +18,7 @@ precedenti è *Impostazioni → Componenti aggiuntivi* (Add-on). Funziona allo s
 3. **L'add-on.** Nell'archivio compare **NetMon sonda** → *Installa* (la prima volta Home Assistant
    costruisce il programma: qualche minuto).
 4. **Configurazione** (scheda *Configurazione*):
-   - **Server**: il dominio del server, per esempio `monitorvm.duckdns.org`;
+   - **Server**: il dominio del server, per esempio `vm1.netmonhome.net`;
    - **Token della sonda**: quello del punto 1;
    - **Nome della sonda**: come comparirà nella pagina di stato.
 
@@ -35,7 +35,8 @@ Dopo meno di un minuto la sonda è in linea nella pagina di stato.
 Al primo avvio la sonda controlla solo il router (il gateway della rete di Home Assistant). Gli
 altri dispositivi si aggiungono come per il Raspberry:
 
-- dalla **pagina di stato** del server (*Impostazioni → Controlli* della sonda), oppure
+- dalla **pagina di stato** del server (*Stato rete › Sonde e monitoraggio*, pulsante **＋** accanto al
+  nome della sonda), oppure
 - dalla **pagina locale** della sonda: pulsante *Apri interfaccia web* dell'add-on, oppure
   `http://IP-DI-HOME-ASSISTANT:8080` (anche `http://homeassistant.local:8080`). Chiede la password
   del punto 5. Da qui si configura anche il FRITZ!Box.

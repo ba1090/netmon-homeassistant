@@ -16,7 +16,7 @@
 
 Dipendenze: python3-yaml (già installato per la sonda).
 """
-__version__ = "1.1.20261016-123657"
+__version__ = "1.1.20261019-170824"
 import base64
 import hmac
 import ipaddress
@@ -263,7 +263,9 @@ def clean_fritz_more(raw, current, errors):
     cur = {b.get("id"): b for b in (current or {}).get("fritz_more") or [] if isinstance(b, dict)}
     items = raw if isinstance(raw, list) else []
     # Il limite lo decide l'amministratore sul server (fritz_max, con default FRITZ_MAX)
-    lim = max(0, min(8, int((current or {}).get("fritz_max") or FRITZ_MAX)))
+    # 0 è un valore vero (nessun FRITZ!Box oltre al primo), non «mancante»
+    raw = (current or {}).get("fritz_max")
+    lim = max(0, min(8, int(FRITZ_MAX if raw in (None, "") else raw)))
     if len(items) > lim:
         errors.append(f"Al massimo {lim} FRITZ!Box oltre al primo.")
         items = items[:lim]
@@ -314,7 +316,7 @@ def validate(data, current=None):
         "fritz_user": str(data.get("fritz_user", base.get("fritz_user", ""))).strip(),
         "fritz_password": str(data.get("fritz_password", base.get("fritz_password", ""))),
         # Non è un campo della pagina: arriva dal server insieme alla configurazione
-        "fritz_max": max(0, min(8, int(base.get("fritz_max") or FRITZ_MAX))),
+        "fritz_max": max(0, min(8, int(FRITZ_MAX if base.get("fritz_max") in (None, "") else base["fritz_max"]))),
         # Anche questo arriva dal server: quanti dispositivi può controllare la sonda
         "devices_max": max(1, min(200, int(base.get("devices_max") or DEVICES_MAX))),
         # lingua della pagina: si cambia con il selettore in alto (/api/language)
@@ -1191,8 +1193,9 @@ select.pill:hover{border-color:var(--muted)}
       <button type="button" id="test-all">Prova tutti</button>
     </div>
     <div class="limits-note">
-      <p><b>Limiti del tuo account</b> (li decide l'amministratore del server): fino a
-        <b><span id="dev-max">30</span> dispositivi</b> e <b><span id="lim-fritz">4</span> FRITZ!Box aggiuntivi</b>.</p>
+      <p><b>Limiti del tuo account</b> (li decide l'amministratore del server): questa sonda può avere fino a
+        <b><span id="dev-max">30</span> dispositivi</b> e <b><span id="lim-fritz">4</span> FRITZ!Box aggiuntivi</b>
+        (la parte che le resta del totale del tuo account, condiviso con le altre sonde).</p>
       <p><b>Se superi i limiti</b>: arrivato al massimo, «Aggiungi dispositivo» si disattiva e il salvataggio
         rifiuta le righe in più. Se il limite viene abbassato quando ne hai già di più, gli ultimi della
         lista (e i FRITZ!Box aggiuntivi oltre il limite) smettono di essere controllati e spariscono da
@@ -2545,6 +2548,20 @@ TRANSLATIONS = {
     "È la password che il browser chiede quando apri la pagina della sonda: la stessa scelta all'installazione. Cambiandola qui non serve riavviare nulla: al prossimo aggiornamento della pagina il browser chiederà quella nuova (almeno 8 caratteri, senza spazi, virgolette, \\ e $ — li legge systemd).": "C'est le mot de passe que le navigateur demande quand tu ouvres la page de la sonde : le même que celui choisi à l'installation. Le changer ici ne nécessite aucun redémarrage : au prochain rechargement, le navigateur demandera le nouveau (au moins 8 caractères, sans espaces, guillemets, \\ ni $ — systemd les lit).",
 },
 }
+
+# Limiti dell'account in totale (condivisi tra le sonde)
+for _it, _tr in {
+    "(li decide l'amministratore del server): questa sonda può avere fino a":
+        ("(set by the server administrator): this probe can have up to",
+         "(legt der Administrator des Servers fest): diese Sonde kann bis zu",
+         "(fixées par l'administrateur du serveur) : cette sonde peut avoir jusqu'à"),
+    "(la parte che le resta del totale del tuo account, condiviso con le altre sonde).":
+        ("(what is left for it of your account's total, shared with your other probes).",
+         "haben (was ihr vom Gesamtkontingent deines Kontos bleibt, das mit den anderen Sonden geteilt wird).",
+         "(la part qui lui reste du total de ton compte, partagé avec tes autres sondes)."),
+}.items():
+    for _lang, _text in zip(("en", "de", "fr"), _tr):
+        TRANSLATIONS[_lang].setdefault(_it, _text)
 
 
 # Caratteri della pagina (copia di server/fonts.py): Roboto e Roboto Mono serviti dalla sonda stessa,

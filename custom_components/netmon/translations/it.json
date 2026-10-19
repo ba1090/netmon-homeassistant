@@ -11,7 +11,7 @@
           "verify_ssl": "Verifica il certificato HTTPS"
         },
         "data_description": {
-          "url": "Per esempio https://monitorvm.duckdns.org"
+          "url": "Per esempio https://vm1.netmonhome.net"
         }
       },
       "reauth_confirm": {

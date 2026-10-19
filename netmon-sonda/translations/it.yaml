@@ -1,7 +1,7 @@
 configuration:
   server:
     name: Server
-    description: Dominio del server NetMon, per esempio monitorvm.duckdns.org (https; scrivi http:// solo se il server non ha HTTPS)
+    description: Dominio del server NetMon, per esempio vm1.netmonhome.net (https; scrivi http:// solo se il server non ha HTTPS)
   token:
     name: Token della sonda
     description: Il token sonda_… creato nella pagina di stato, Impostazioni → Sonde → Aggiungi una sonda

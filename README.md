@@ -16,6 +16,9 @@ Da Home Assistant 2026.2 gli add-on si chiamano **app**. Nelle versioni preceden
 
 ## La sonda in Home Assistant, passo per passo
 
+**Guida in PDF**, da stampare o mandare a chi installa: [NetMon-sonda-Home-Assistant.pdf](docs/NetMon-sonda-Home-Assistant.pdf)
+(sorgente in `docs/guida/`, si rigenera con `node docs/guida/pdf.mjs`).
+
 Serve Home Assistant OS (o Supervised): è l'installazione con il menu *App*.
 
 **1. Crea la sonda nella pagina di stato di NetMon.** Vai in *Impostazioni → Sonde*, scrivi un nome e
@@ -43,7 +46,7 @@ Raspberry Pi anche 5–10.
 ![Installa](docs/img/05-ha-installa.png)
 
 **6. Configura.** Nella scheda *Configurazione* scrivi il server (il dominio, per esempio
-`monitorvm.duckdns.org`), il token e il nome della sonda, poi premi *Salva*:
+`vm1.netmonhome.net`), il token e il nome della sonda, poi premi *Salva*:
 
 ![Configurazione](docs/img/06-ha-configurazione.png)
 
@@ -56,7 +59,8 @@ avvio. La riga «Primo invio al server riuscito» vuol dire che la sonda è coll
 
 ![Registro](docs/img/08-ha-registro.png)
 
-**9. Aggiungi i dispositivi.** Puoi farlo dalla pagina di stato di NetMon, oppure dalla pagina locale
+**9. Aggiungi i dispositivi.** Puoi farlo dalla pagina di stato di NetMon (*Stato rete › Sonde e
+monitoraggio*, pulsante **＋** accanto al nome della sonda), oppure dalla pagina locale
 della sonda: pulsante *Apri interfaccia web*, o `http://homeassistant.local:8080` con la password
 del punto 8. Dalla pagina locale si configura anche il FRITZ!Box.
 

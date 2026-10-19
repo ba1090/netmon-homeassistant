@@ -28,7 +28,7 @@ compaiono da soli al primo aggiornamento.
 2. Repository: `https://github.com/ba1090/netmon-homeassistant` · Tipo: **Integrazione** → **Aggiungi**.
 3. Cerca **NetMon** in HACS → **Scarica**, poi **riavvia Home Assistant**.
 4. **Impostazioni → Dispositivi e servizi → Aggiungi integrazione → NetMon** e inserisci:
-   - **Indirizzo del server**: quello della pagina di stato, per esempio `https://monitorvm.duckdns.org`;
+   - **Indirizzo del server**: quello della pagina di stato, per esempio `https://vm1.netmonhome.net`;
    - **Email** e **Password** del tuo account NetMon (non quelli di `/admin`).
 
 Con più VM dietro il gateway puoi mettere l'indirizzo del gateway: se l'account vive su un'altra VM,

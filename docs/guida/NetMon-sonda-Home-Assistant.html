@@ -1,0 +1,226 @@
+<!doctype html>
+<!-- Sorgente del PDF docs/NetMon-sonda-Home-Assistant.pdf. Per rigenerarlo: node docs/guida/pdf.mjs
+     (Chromium, formato A4, piè di pagina con il numero di pagina). La versione è nel frontespizio. -->
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<title>Installare la sonda NetMon su Home Assistant</title>
+<style>
+  @page { size: A4; margin: 16mm 16mm 18mm; }
+  :root { --ink:#1f2a37; --muted:#556171; --accent:#174A72; --line:#dde3ea; --soft:#f1f4f8; --warn:#D99A06; --warnbg:#fff8e6; --ok:#2E7D32; --okbg:#e6f4ea; }
+  * { box-sizing: border-box; }
+  body { font-family: "DejaVu Sans", "Segoe UI", Roboto, Arial, sans-serif; color: var(--ink); font-size: 10.5pt; line-height: 1.5; margin: 0; }
+  h1 { font-size: 26pt; line-height: 1.15; color: var(--accent); margin: 0 0 10px; }
+  h2 { font-size: 14pt; color: var(--accent); margin: 0 0 10px; display: flex; align-items: center; gap: 10px; }
+  h3 { font-size: 12.5pt; color: var(--accent); margin: 22px 0 8px; }
+  .num { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; border-radius: 50%;
+         background: var(--accent); color: #fff; font-size: 11pt; flex: none; }
+  .page { page-break-after: always; }
+  .page:last-child { page-break-after: auto; }
+  .cover { padding-top: 70mm; }
+  .cover img { width: 70mm; }
+  .cover .sub { color: var(--muted); font-size: 12.5pt; margin: 0 0 22mm; }
+  .box { background: var(--soft); border-left: 4px solid var(--accent); padding: 12px 18px; margin: 12px 0; }
+  .note { background: var(--warnbg); border-left: 4px solid var(--warn); padding: 10px 16px; margin: 12px 0; }
+  code, .code { font-family: "DejaVu Sans Mono", Menlo, Consolas, monospace; font-size: 9.5pt; background: var(--soft); padding: 1px 5px; border-radius: 3px; }
+  .codebox { background: var(--soft); padding: 10px 14px; border-radius: 4px; font-family: "DejaVu Sans Mono", Menlo, monospace;
+             font-weight: bold; color: var(--accent); font-size: 11pt; margin: 8px 0; }
+  figure { margin: 12px 0 0; }
+  figure img { width: 100%; border: 1px solid var(--line); border-radius: 6px; display: block; }
+  figcaption { font-size: 9pt; color: var(--muted); margin-top: 6px; }
+  .tag { display: inline-block; font-size: 8pt; font-weight: bold; padding: 1px 8px; border-radius: 99px; margin-right: 8px; }
+  .tag.vera { background: var(--okbg); color: var(--ok); }
+  .tag.ill { background: var(--warnbg); color: #8a5a00; }
+  table { width: 100%; border-collapse: collapse; font-size: 9.5pt; margin: 8px 0; }
+  th, td { border: 1px solid var(--line); padding: 7px 10px; text-align: left; vertical-align: top; }
+  th { background: var(--soft); }
+  ul { padding-left: 20px; margin: 6px 0; }
+  li { margin: 3px 0; }
+  p { margin: 6px 0; }
+</style>
+</head>
+<body>
+
+<section class="page cover">
+  <img src="../img/logo.png" alt="NetMon">
+  <h1>Installare la sonda NetMon<br>su Home Assistant</h1>
+  <p class="sub">Guida passo passo, con le schermate · versione 1.1.20261019-170824</p>
+  <div class="box">
+    <p>La sonda di NetMon gira dentro Home Assistant come <b>app</b> (add-on), al posto del Raspberry Pi: fa i ping
+      ai dispositivi di casa, legge il FRITZ!Box, fa gli speedtest (anche periodici) e manda tutto al tuo server NetMon.</p>
+    <p style="margin-top:12px">Repository: <b>https://github.com/ba1090/netmon-homeassistant</b></p>
+  </div>
+</section>
+
+<section class="page">
+  <h3 style="margin-top:0">Prima di cominciare</h3>
+  <ul>
+    <li><b>Home Assistant OS</b> (o Supervised): è l'installazione con il menu <i>Impostazioni → App</i>. Con Home
+      Assistant Container o Core le app non ci sono.</li>
+    <li>Un <b>account NetMon</b> per accedere alla pagina di stato (ti arriva con l'invito via email).</li>
+    <li>Home Assistant collegato alla <b>rete di casa</b>, meglio via cavo: la sonda controlla i dispositivi della rete
+      in cui si trova, e in Wi-Fi gli speedtest misurano anche il Wi-Fi, non solo la linea.</li>
+    <li>Circa <b>15 minuti</b>.</li>
+  </ul>
+  <div class="note"><b>App o add-on?</b> Da Home Assistant 2026.2 gli «add-on» si chiamano «app». Nelle versioni precedenti
+    il menu è <i>Impostazioni → Componenti aggiuntivi</i> e l'archivio si chiama <i>Archivio dei componenti aggiuntivi</i>:
+    i passi sono gli stessi.</div>
+  <div class="note"><b>Sulle immagini.</b> Le schermate di NetMon (passi 1, 2, 9 e 10) sono <b>vere</b>. Quelle di Home
+    Assistant (passi 3–8) sono <b>illustrazioni</b>: sullo schermo voci e aspetto possono essere un po' diversi.</div>
+  <h3>In breve</h3>
+  <table>
+    <tr><th style="width:32%">Dove</th><th>Cosa fai</th></tr>
+    <tr><td>Pagina di stato NetMon</td><td>crei la sonda e copi token e indirizzo del server (passi 1–2)</td></tr>
+    <tr><td>Home Assistant</td><td>aggiungi il repository, installi, configuri e avvii l'app NetMon sonda (passi 3–8)</td></tr>
+    <tr><td>Pagina di stato o pagina locale</td><td>aggiungi i dispositivi da controllare (passi 9–10)</td></tr>
+  </table>
+</section>
+
+<section class="page">
+  <h2><span class="num">1</span> Crea la sonda nella pagina di stato di NetMon</h2>
+  <p>Dal browser apri la pagina di stato del tuo server NetMon (l'indirizzo è nell'email di invito, per esempio
+    <code>https://vm1.netmonhome.net</code>) e accedi. Vai in <b>Impostazioni → Sonde</b>, nel riquadro
+    <b>Aggiungi una sonda</b> scrivi un nome (per esempio <i>Home Assistant</i>) e premi <b>Crea sonda</b>.</p>
+  <p>Se è la tua prima sonda, la Dashboard ti propone anche la procedura guidata <i>Collega la tua prima sonda</i>:
+    va bene lo stesso, fermati quando mostra il token. Quante sonde puoi collegare lo decide il piano del tuo account.</p>
+  <figure><img src="../img/01-netmon-aggiungi-sonda.png" alt="">
+    <figcaption><span class="tag vera">schermata vera</span>Impostazioni → Sonde → Aggiungi una sonda</figcaption></figure>
+</section>
+
+<section class="page">
+  <h2><span class="num">2</span> Copia il token e l'indirizzo del server</h2>
+  <p>Compare il <b>token</b>, che comincia con <code>sonda_</code>. Premi <b>Copia</b> e tienilo da parte: <b>si vede una volta
+    sola</b>. Se lo perdi, dalla stessa pagina puoi generarne uno nuovo con <i>Nuovo token</i>.</p>
+  <p>Sotto c'è l'<b>indirizzo del server</b> (per esempio <code>https://vm1.netmonhome.net/api/report</code>): al passo 6
+    ti serve la parte in mezzo, il dominio, cioè <code>vm1.netmonhome.net</code>.</p>
+  <figure><img src="../img/02-netmon-token.png" alt="">
+    <figcaption><span class="tag vera">schermata vera</span>il token da copiare (questo è di un server di prova)</figcaption></figure>
+</section>
+
+<section class="page">
+  <h2><span class="num">3</span> Aggiungi il repository a Home Assistant</h2>
+  <p>In Home Assistant vai in <b>Impostazioni → App → Archivio delle app</b> (pulsante in basso a destra). Apri il menu
+    <b>⋮</b> in alto a destra → <b>Repository</b>, incolla l'indirizzo</p>
+  <div class="codebox">https://github.com/ba1090/netmon-homeassistant</div>
+  <p>e premi <b>Aggiungi</b>, poi <b>Chiudi</b>.</p>
+  <figure><img src="../img/03-ha-repository.png" alt="">
+    <figcaption><span class="tag ill">illustrazione</span>Archivio delle app → ⋮ → Repository</figcaption></figure>
+</section>
+
+<section class="page">
+  <h2><span class="num">4</span> Trova NetMon sonda nell'archivio</h2>
+  <p>In fondo all'archivio compare la sezione <b>NetMon</b> con l'app <b>NetMon sonda</b>. Se non la vedi, ricarica la pagina
+    oppure usa ⋮ → <i>Controlla aggiornamenti</i>. Aprila.</p>
+  <figure><img src="../img/04-ha-archivio-netmon.png" alt="">
+    <figcaption><span class="tag ill">illustrazione</span>la sezione NetMon nell'archivio delle app</figcaption></figure>
+</section>
+
+<section class="page">
+  <h2><span class="num">5</span> Installa l'app</h2>
+  <p>Premi <b>Installa</b>. La prima volta Home Assistant costruisce il programma sul tuo dispositivo: servono alcuni
+    minuti, su un Raspberry Pi anche 5–10. Non chiudere la pagina finché non compaiono le schede <i>Configurazione</i> e
+    <i>Registro</i>. Il numero di versione che vedi sarà quello più recente.</p>
+  <figure><img src="../img/05-ha-installa.png" alt="">
+    <figcaption><span class="tag ill">illustrazione</span>pagina dell'app → Installa</figcaption></figure>
+</section>
+
+<section class="page">
+  <h2><span class="num">6</span> Configura server, token e nome</h2>
+  <p>Apri la scheda <b>Configurazione</b> e compila:</p>
+  <ul>
+    <li><b>Server</b>: il dominio del tuo server, cioè l'indirizzo del passo 2 senza <code>https://</code> e senza
+      <code>/api/report</code>, per esempio <code>vm1.netmonhome.net</code>;</li>
+    <li><b>Token della sonda</b>: quello copiato al passo 2;</li>
+    <li><b>Nome della sonda</b>: come vuoi vederla nella pagina di stato;</li>
+    <li><b>Password della pagina locale</b>: lasciala vuota per farne creare una, oppure scrivine una di almeno 12
+      caratteri, senza spazi, virgolette, \ e $;</li>
+    <li><b>Porta della pagina locale</b>: lascia 8080.</li>
+  </ul>
+  <p>Premi <b>Salva</b>.</p>
+  <figure><img src="../img/06-ha-configurazione.png" alt="">
+    <figcaption><span class="tag ill">illustrazione</span>scheda Configurazione</figcaption></figure>
+</section>
+
+<section class="page">
+  <h2><span class="num">7</span> Avvia l'app</h2>
+  <p>Torna alla scheda <b>Informazioni</b>, attiva <b>Avvia all'accensione</b> e <b>Watchdog</b> (così la sonda riparte da
+    sola dopo un riavvio o un blocco) e premi <b>Avvia</b>.</p>
+  <figure><img src="../img/07-ha-avvia.png" alt="">
+    <figcaption><span class="tag ill">illustrazione</span>scheda Informazioni</figcaption></figure>
+</section>
+
+<section class="page">
+  <h2><span class="num">8</span> Controlla il registro e salva la password</h2>
+  <p>Apri la scheda <b>Registro</b>. Dopo qualche secondo trovi il riquadro <b>«Password della pagina locale della sonda:
+    …»</b>: <b>annotala</b>, si vede solo al primo avvio. La riga <b>«Primo invio al server riuscito»</b> vuol dire che la
+    sonda è collegata al server.</p>
+  <figure><img src="../img/08-ha-registro.png" alt="">
+    <figcaption><span class="tag ill">illustrazione</span>scheda Registro (il testo è quello vero dell'app)</figcaption></figure>
+</section>
+
+<section class="page">
+  <h2><span class="num">9</span> Aggiungi i dispositivi da controllare</h2>
+  <p>Al primo avvio la sonda controlla solo il router. Gli altri dispositivi si aggiungono in due modi:</p>
+  <ul>
+    <li>dalla <b>pagina di stato</b> di NetMon: <i>Stato rete › Sonde e monitoraggio</i>, pulsante <b>＋</b> accanto al nome
+      della sonda;</li>
+    <li>dalla <b>pagina locale</b> della sonda: pulsante <b>Apri interfaccia web</b> dell'app, oppure
+      <code>http://homeassistant.local:8080</code>, con la password del passo 8. Da qui si configura anche il
+      <b>FRITZ!Box</b>.</li>
+  </ul>
+  <p>Quanti dispositivi e FRITZ!Box puoi controllare lo decide il piano del tuo account, in totale per tutte le tue sonde.</p>
+  <figure><img src="../img/09-pagina-locale-sonda.png" alt="">
+    <figcaption><span class="tag vera">schermata vera</span>pagina locale della sonda, sezione Dispositivi</figcaption></figure>
+</section>
+
+<section class="page">
+  <h2><span class="num">10</span> Fatto: la sonda è in linea</h2>
+  <p>Entro un minuto la sonda e i suoi dispositivi compaiono nella pagina di stato di NetMon. Avvisi, storico, mappa e
+    SpeedTest funzionano come con il Raspberry Pi: dal riquadro <b>SpeedTest</b> della Dashboard puoi fare subito il primo
+    test con <b>Avvia ora</b>, e in <i>Impostazioni → Controlli</i> attivare gli speedtest periodici.</p>
+  <figure><img src="../img/10-netmon-sonda-in-linea.png" alt="">
+    <figcaption><span class="tag vera">schermata vera</span>la Dashboard di NetMon con i dispositivi della sonda</figcaption></figure>
+</section>
+
+<section class="page">
+  <h3 style="margin-top:0">Differenze rispetto al Raspberry Pi</h3>
+  <ul>
+    <li><b>Aggiornamenti</b>: arrivano come aggiornamenti dell'app in Home Assistant (<i>Impostazioni → Aggiornamenti</i>),
+      non dal tasto <i>Aggiorna netmon</i> della pagina di stato. Conviene attivare <i>Aggiornamento automatico</i>
+      nella scheda Informazioni dell'app.</li>
+    <li><b>Riavvio e reti Wi-Fi da remoto</b> non ci sono: li gestisce Home Assistant. Anche <i>Disinstalla sonda</i> della
+      pagina locale non serve: si disinstalla l'app.</li>
+    <li><b>Server, token e nome</b> si cambiano nella scheda <i>Configurazione</i> dell'app. Un <i>Rinomina</i> fatto dalla
+      pagina di stato resta finché non cambi il nome lì.</li>
+    <li><b>SpeedTest</b>: a mano e periodici, come sul Raspberry. Se Home Assistant è in Wi-Fi la pagina lo segnala: la
+      velocità misurata dipende anche dal Wi-Fi.</li>
+    <li><b>Dati</b>: configurazione, misure non ancora inviate e password restano tra un aggiornamento e l'altro e
+      finiscono nei backup di Home Assistant.</li>
+  </ul>
+  <h3>Se qualcosa non va</h3>
+  <table>
+    <tr><th style="width:32%">Cosa vedi</th><th>Cosa fare</th></tr>
+    <tr><td>Nel registro: «Manca l'indirizzo del server o il token»</td><td>Compila <i>Server</i> e <i>Token della sonda</i>
+      nella scheda Configurazione e salva.</td></tr>
+    <tr><td>Nel registro: «Invio al server fallito» con 401</td><td>Il token è sbagliato: generane uno nuovo nella pagina di
+      stato (<i>Nuovo token</i>) e incollalo nelle opzioni.</td></tr>
+    <tr><td>Nel registro: «Invio al server fallito» con altri errori</td><td>Controlla il dominio nel campo <i>Server</i>
+      (per esempio <code>vm1.netmonhome.net</code>, senza <code>https://</code>) e che la pagina di stato si apra dal browser.</td></tr>
+    <tr><td>NetMon sonda non compare nell'archivio</td><td>Ricarica la pagina o usa ⋮ → <i>Controlla aggiornamenti</i>;
+      controlla che l'indirizzo del repository sia esatto.</td></tr>
+    <tr><td>L'installazione non riesce</td><td>Guarda il messaggio in <i>Impostazioni → Sistema → Registri</i> (Supervisor)
+      e mandalo a chi ti ha dato la guida.</td></tr>
+    <tr><td>La pagina locale non si apre</td><td>La porta 8080 può essere occupata da un'altra app: scegline un'altra in
+      <i>Porta della pagina locale</i>, riavvia l'app e apri <code>http://homeassistant.local:NUOVA-PORTA</code>.</td></tr>
+    <tr><td>Password della pagina locale persa</td><td>Scrivine una nuova in <i>Password della pagina locale</i> e riavvia
+      l'app.</td></tr>
+  </table>
+  <h3>In più: lo stato di NetMon dentro Home Assistant</h3>
+  <p>Nello stesso repository c'è anche l'<b>integrazione NetMon</b>, che si installa da <b>HACS</b> (<i>Repository
+    personalizzati</i>, tipo <i>Integrazione</i>, stesso indirizzo). Porta in Home Assistant lo stato di sonde e dispositivi
+    come entità, per automazioni e dashboard. È facoltativa e indipendente dalla sonda: istruzioni nel file
+    <code>HOME-ASSISTANT.md</code> del repository.</p>
+</section>
+
+</body>
+</html>

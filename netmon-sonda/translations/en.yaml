@@ -1,7 +1,7 @@
 configuration:
   server:
     name: Server
-    description: Domain of the NetMon server, e.g. monitorvm.duckdns.org (https; write http:// only if the server has no HTTPS)
+    description: Domain of the NetMon server, e.g. vm1.netmonhome.net (https; write http:// only if the server has no HTTPS)
   token:
     name: Probe token
     description: The sonda_… token created on the status page, Settings → Probes → Add a probe

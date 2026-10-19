@@ -8,8 +8,9 @@ con cache, buffer letto e scritto a pezzi.
 Dipendenze (Debian, Raspberry Pi OS e simili): sudo apt install python3-yaml
 (fritzconnection, facoltativa, solo per il FRITZ!Box)
 """
-__version__ = "1.1.20261016-123657"
+__version__ = "1.1.20261019-170824"
 import http.client
+import fcntl
 import ipaddress
 import json
 import logging
@@ -19,7 +20,9 @@ import re
 import shutil
 import socket
 import ssl
+import struct
 import subprocess
+import termios
 import threading
 import time
 from collections import deque
@@ -1018,7 +1021,9 @@ def fritz_boxes(cfg):
                     "fritz_password": cfg.get("fritz_password") or ""})
     # Quante FRITZ!Box oltre al primo: lo decide l'amministratore (fritz_max), default FRITZ_MAX
     try:
-        lim = max(0, min(8, int(cfg.get("fritz_max") or FRITZ_MAX)))
+        # 0 è un valore vero (nessun FRITZ!Box oltre al primo), non «mancante»
+        raw = cfg.get("fritz_max")
+        lim = max(0, min(8, int(FRITZ_MAX if raw in (None, "") else raw)))
     except (TypeError, ValueError):
         lim = FRITZ_MAX
     for b in (cfg.get("fritz_more") or [])[:lim]:
@@ -1458,11 +1463,18 @@ LOG_OK_EVERY = 3600    # con tutto invariato, una riga "OK" nel registro all'ora
 # speed.cloudflare.com nel browser): latenza, download e upload con più connessioni in parallelo,
 # ognuna limitata nel tempo e nei byte. Solo libreria standard: niente programmi da installare.
 # Parte alla fine del ciclo dei ping e il risultato viaggia con il report di quel ciclo.
+# La velocità si calcola DOPO i primi secondi: all'inizio le connessioni TCP accelerano (slow start) e
+# contarli abbasserebbe il risultato, soprattutto sulle linee veloci. Il tetto ai byte cresce con la
+# velocità misurata, perché una linea veloce non esaurisca il budget proprio durante l'accelerazione.
 SPEED_HOST = "speed.cloudflare.com"
 SPEED_STREAMS = 4               # connessioni in parallelo (una sola sottostima le linee veloci)
 SPEED_SECONDS = 8               # durata massima di download e di upload
-SPEED_MAX_DOWN = 120_000_000    # tetto ai byte scaricati (linee a consumo, per esempio LTE)
-SPEED_MAX_UP = 30_000_000       # tetto ai byte caricati
+SPEED_WARMUP = 2.0              # secondi iniziali esclusi dal calcolo (accelerazione delle connessioni)
+SPEED_MIN_WINDOW = 1.0          # finestra minima dopo l'accelerazione; se più corta, si usa tutto il test
+SPEED_MAX_DOWN = 120_000_000    # byte scaricati sulle linee fino a ~120 Mbit/s (linee a consumo, LTE)
+SPEED_CAP_DOWN = 750_000_000    # tetto assoluto, per le linee veloci (circa 1 Gbit/s per 6 secondi)
+SPEED_MAX_UP = 30_000_000       # byte caricati sulle linee fino a ~30 Mbit/s
+SPEED_CAP_UP = 250_000_000      # tetto assoluto in upload
 _speed_req = {}                 # richiesta in attesa: {"id": ...}
 _speed_done = set()             # richieste già misurate (il server smette di inviarle col report)
 
@@ -1477,26 +1489,60 @@ def _speed_conn():
     return http.client.HTTPSConnection(SPEED_HOST, timeout=15, context=ssl.create_default_context())
 
 
-def _speed_streams(work, budget):
-    """Esegue work(deadline, budget_condiviso) su SPEED_STREAMS thread; restituisce (byte, secondi)."""
-    lock, total = threading.Lock(), [0]
+def _unsent(sock):
+    """Byte scritti sulla connessione ma non ancora confermati dall'altra parte (Linux). In upload
+    send() ritorna appena i dati sono nel buffer del sistema: senza toglierli, l'inizio del test
+    (buffer che si riempiono di colpo) sembrerebbe velocissimo."""
+    try:
+        return struct.unpack("i", fcntl.ioctl(sock.fileno(), termios.TIOCOUTQ, b"\0\0\0\0"))[0]
+    except (OSError, ValueError, AttributeError):
+        return 0
+
+
+def _speed_streams(work, base, cap):
+    """Esegue work(deadline, add, socks) su SPEED_STREAMS thread. Restituisce (byte al secondo, byte
+    totali): la velocità è quella dopo SPEED_WARMUP secondi, se la misura è durata abbastanza.
+    socks: le connessioni di upload si registrano qui, per contare solo i byte già arrivati."""
+    lock = threading.Lock()
+    st = {"total": 0, "budget": base}
+    socks = []
     start = time.monotonic()
     deadline = start + SPEED_SECONDS
 
     def add(n):
         with lock:
-            total[0] += n
-            return total[0] < budget
+            st["total"] += n
+            return st["total"] < st["budget"]
 
-    threads = [threading.Thread(target=work, args=(deadline, add), daemon=True) for _ in range(SPEED_STREAMS)]
+    threads = [threading.Thread(target=work, args=(deadline, add, socks), daemon=True) for _ in range(SPEED_STREAMS)]
     for t in threads:
         t.start()
+    samples = [(0.0, 0)]                          # (secondi dall'inizio, byte arrivati) ogni decimo di secondo
+    while any(t.is_alive() for t in threads) and time.monotonic() < deadline + 20:
+        time.sleep(0.1)
+        now = time.monotonic() - start
+        with lock:
+            done = max(samples[-1][1], st["total"] - sum(_unsent(x) for x in list(socks)))
+            # tetto: almeno quello di base; se la linea va più veloce, quanto serve per arrivare alla
+            # fine del tempo alla velocità degli ultimi 0,5 secondi (con un po' di margine)
+            old = next((x for x in reversed(samples) if now - x[0] >= 0.5), samples[0])
+            rate = (done - old[1]) / max(0.05, now - old[0])
+            st["budget"] = max(st["budget"], min(cap, st["total"] + rate * (SPEED_SECONDS - now + 0.5)))
+        samples.append((now, done))
     for t in threads:
-        t.join(SPEED_SECONDS + 20)
-    return total[0], max(0.001, min(time.monotonic(), deadline + 1) - start)
+        t.join(1)
+    total = st["total"]
+    if not socks:                                 # download: l'ultimo byte è arrivato quando è stato contato
+        samples.append((min(time.monotonic() - start, SPEED_SECONDS), total))
+    # fine della misura: il primo campione con il totale finale (dopo non è arrivato più niente)
+    end = next(x for x in samples if x[1] >= samples[-1][1])
+    warm = next((x for x in samples if x[0] >= SPEED_WARMUP), None)
+    if warm and end[0] - warm[0] >= SPEED_MIN_WINDOW and end[1] > warm[1]:
+        return (end[1] - warm[1]) / (end[0] - warm[0]), total
+    return end[1] / max(0.001, end[0]), total
 
 
-def _download(deadline, add):
+def _download(deadline, add, socks):
     conn = _speed_conn()
     try:
         while time.monotonic() < deadline:
@@ -1516,10 +1562,12 @@ def _download(deadline, add):
         conn.close()
 
 
-def _upload(deadline, add):
+def _upload(deadline, add, socks):
     block = b"0" * 1_000_000
     conn = _speed_conn()
     try:
+        conn.connect()
+        socks.append(conn.sock)
         while time.monotonic() < deadline:
             conn.putrequest("POST", "/__up")
             conn.putheader("Content-Type", "application/octet-stream")
@@ -1537,6 +1585,9 @@ def _upload(deadline, add):
     except (OSError, http.client.HTTPException):
         pass
     finally:
+        if conn.sock in socks:
+            add(-_unsent(conn.sock))            # i byte rimasti nel buffer non sono arrivati: non contano
+            socks.remove(conn.sock)
         conn.close()
 
 
@@ -1562,13 +1613,13 @@ def run_speedtest():
             conn.close()
         pings = pings[1:]                         # il primo include l'apertura della connessione
         mid = sorted(pings)[len(pings) // 2]
-        down, d_sec = _speed_streams(_download, SPEED_MAX_DOWN)
-        up, u_sec = _speed_streams(_upload, SPEED_MAX_UP)
+        d_rate, down = _speed_streams(_download, SPEED_MAX_DOWN, SPEED_CAP_DOWN)
+        u_rate, up = _speed_streams(_upload, SPEED_MAX_UP, SPEED_CAP_UP)
         if not down:
             raise OSError("download non riuscito")
         out.update(ok=True, ping_ms=round(mid, 1),
                    jitter_ms=round(sum(abs(a - b) for a, b in zip(pings, pings[1:])) / max(1, len(pings) - 1), 1),
-                   down_mbps=round(down * 8 / d_sec / 1e6, 1), up_mbps=round(up * 8 / u_sec / 1e6, 1),
+                   down_mbps=round(d_rate * 8 / 1e6, 1), up_mbps=round(u_rate * 8 / 1e6, 1),
                    bytes_down=down, bytes_up=up, server=f"Cloudflare {colo}".strip())
     except (OSError, http.client.HTTPException, IndexError) as exc:
         out.update(ok=False, error=str(exc)[:200] or exc.__class__.__name__)

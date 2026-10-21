@@ -8,7 +8,8 @@ NetMon. Avvisi, storico e pagina di stato restano sul server come sempre.
 ## Installazione
 
 1. **Il token.** Nella pagina di stato del server: *Impostazioni → Sonde → Aggiungi una sonda*.
-   Copia il token `sonda_…` (si vede una volta sola).
+   Copia il token `sonda_…` (si vede una volta sola). Ogni sonda ha il suo token: se l'app prende il
+   posto di un Raspberry Pi, vedi *Al posto di un Raspberry Pi* più sotto.
 Da Home Assistant 2026.2 gli add-on si chiamano **app**: il menu è *Impostazioni → App*; nelle versioni
 precedenti è *Impostazioni → Componenti aggiuntivi* (Add-on). Funziona allo stesso modo.
 
@@ -43,15 +44,24 @@ altri dispositivi si aggiungono come per il Raspberry:
 
 ## Differenze rispetto al Raspberry
 
-- **Aggiornamenti.** Arrivano come aggiornamenti dell'add-on in Home Assistant, non dal tasto
-  *Aggiorna netmon* della pagina di stato: la sonda segnala da sola al server che le operazioni da
-  remoto qui non ci sono.
-- **Riavvio e reti Wi-Fi da remoto**: non disponibili (li gestisce Home Assistant). Anche il tasto
-  *Disinstalla* della pagina locale non serve: si disinstalla l'add-on.
+- **Aggiornamenti.** Arrivano come aggiornamenti dell'add-on in Home Assistant (*Impostazioni →
+  Aggiornamenti*). La sonda dice al server di essere l'app di Home Assistant: gli aggiornamenti
+  programmati dal pannello la saltano e *Stato sonda* mostra dove aggiornarla invece dei pulsanti.
+- **Riavvio e reti Wi-Fi**: li gestisce Home Assistant (*App → NetMon sonda → Riavvia*;
+  *Impostazioni → Sistema → Rete*). Nella pagina locale non ci sono *Riavvia la sonda* e *Disinstalla
+  sonda*: si disinstalla l'add-on.
 - **Server e token** si cambiano nelle opzioni dell'add-on. Il **nome** pure; un *Rinomina* fatto
   dalla pagina di stato resta finché non cambi il nome nelle opzioni.
 - **Dati**: configurazione, misure non ancora inviate e password stanno nella cartella dell'add-on
   e restano tra un aggiornamento e l'altro (e nei backup di Home Assistant).
+
+## Al posto di un Raspberry Pi
+
+Il server accetta un token da un solo dispositivo. Se l'app prende il posto di un Raspberry Pi e usi
+il suo token, il registro dell'app dice «Token già in uso da un'altra sonda»: nella pagina di stato
+compare un riquadro giallo, premi **Usa il nuovo dispositivo**. Lo stesso dopo aver ripristinato un
+backup di Home Assistant su un'altra macchina. Se invece il Raspberry resta acceso, crea una sonda
+nuova (*Aggiungi una sonda*) e usa il suo token.
 
 ## Porta della pagina locale
 
@@ -64,4 +74,5 @@ scegline un'altra nelle opzioni (*Porta della pagina locale*) e riavvia l'add-on
 - **La sonda non compare in linea**: guarda la scheda *Registro*. «Manca l'indirizzo del server o il
   token» vuol dire opzioni vuote; «Invio al server fallito» con *401* vuol dire token sbagliato (creane
   uno nuovo dalla pagina di stato e incollalo nelle opzioni).
+- **«Token già in uso da un'altra sonda»** nel registro: vedi *Al posto di un Raspberry Pi*.
 - **Password della pagina locale persa**: scrivine una nuova nelle opzioni e riavvia l'add-on.

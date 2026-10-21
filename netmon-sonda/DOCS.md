@@ -35,7 +35,7 @@ Dopo meno di un minuto la sonda è in linea nella pagina di stato.
 Al primo avvio la sonda controlla solo il router (il gateway della rete di Home Assistant). Gli
 altri dispositivi si aggiungono come per il Raspberry:
 
-- dalla **pagina di stato** del server (*Stato rete › Sonde e monitoraggio*, pulsante **＋** accanto al
+- dalla **pagina di stato** del server (*Stato rete › Monitor dispositivi*, pulsante **Modifica ▾** accanto al
   nome della sonda), oppure
 - dalla **pagina locale** della sonda: pulsante *Apri interfaccia web* dell'add-on, oppure
   `http://IP-DI-HOME-ASSISTANT:8080` (anche `http://homeassistant.local:8080`). Chiede la password

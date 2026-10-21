@@ -59,8 +59,8 @@ avvio. La riga «Primo invio al server riuscito» vuol dire che la sonda è coll
 
 ![Registro](docs/img/08-ha-registro.png)
 
-**9. Aggiungi i dispositivi.** Puoi farlo dalla pagina di stato di NetMon (*Stato rete › Sonde e
-monitoraggio*, pulsante **＋** accanto al nome della sonda), oppure dalla pagina locale
+**9. Aggiungi i dispositivi.** Puoi farlo dalla pagina di stato di NetMon (*Stato rete › Monitor
+dispositivi*, pulsante **Modifica ▾** accanto al nome della sonda), oppure dalla pagina locale
 della sonda: pulsante *Apri interfaccia web*, o `http://homeassistant.local:8080` con la password
 del punto 8. Dalla pagina locale si configura anche il FRITZ!Box.
 

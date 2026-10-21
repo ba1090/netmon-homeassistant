@@ -180,6 +180,9 @@ def main():
            "WEB_ENV": WEB_ENV,
            "WEB_PORT": str(port),
            "MALLOC_ARENA_MAX": "2",
+           # la sonda sa di essere l'app di Home Assistant: aggiornamenti, riavvio, reti Wi-Fi e
+           # disinstallazione li fa Home Assistant, e lo dice al server e nella pagina locale
+           "NETMON_PLATFORM": "home-assistant",
            "PYTHONUNBUFFERED": "1"}
     py = sys.executable
     programs = {

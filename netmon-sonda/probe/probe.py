@@ -8,7 +8,7 @@ con cache, buffer letto e scritto a pezzi.
 Dipendenze (Debian, Raspberry Pi OS e simili): sudo apt install python3-yaml
 (fritzconnection, facoltativa, solo per il FRITZ!Box)
 """
-__version__ = "1.1.20261021-152315"
+__version__ = "1.1.20261021-173644"
 import http.client
 import fcntl
 import ipaddress
@@ -46,6 +46,81 @@ MAX_RESPONSE = 4 * 1024 * 1024                            # risposte del server 
 
 class HttpError(OSError):
     """Risposta di errore del server o problema di connessione."""
+    status = None
+
+
+# Identità del dispositivo: il server la usa per accorgersi di due sonde con lo stesso token (vince
+# quella collegata per prima, l'altra riceve 409). Un numero casuale salvato in STATE_DIR, legato
+# alle schede di rete fisiche: un'immagine della scheda SD copiata su un altro dispositivo non ha
+# nessuna delle schede di prima, quindi ne crea uno nuovo. Basta che ne resti una (per esempio
+# togliendo una chiavetta Wi-Fi USB) perché l'identità non cambi.
+INSTANCE_FILE = os.path.join(sysops.STATE_DIR, "instance.json")
+# Ultimo rifiuto del server (token usato da un altro dispositivo): la pagina locale lo mostra
+SERVER_ERROR_FILE = os.path.join(sysops.STATE_DIR, "server-error.json")
+
+
+def _physical_macs():
+    out = set()
+    try:
+        for n in os.listdir("/sys/class/net"):
+            if not os.path.exists(f"/sys/class/net/{n}/device"):
+                continue                       # interfacce virtuali (lo, bridge, veth, docker…)
+            try:
+                with open(f"/sys/class/net/{n}/address", encoding="ascii") as f:
+                    mac = f.read().strip().lower()
+            except OSError:
+                continue
+            if mac and mac != "00:00:00:00:00:00":
+                out.add(mac)
+    except OSError:
+        pass
+    return sorted(out)
+
+
+def instance_id():
+    macs = _physical_macs()
+    try:
+        with open(INSTANCE_FILE, encoding="utf-8") as f:
+            saved = json.load(f)
+        if isinstance(saved, dict) and re.fullmatch(r"[0-9a-f]{32}", str(saved.get("id", ""))):
+            old = set(saved.get("macs") or [])
+            if not macs or not old or old & set(macs):
+                if macs and set(macs) != old:
+                    _save_instance(saved["id"], macs)
+                return saved["id"]
+            log.info("Schede di rete diverse da quelle di prima: nuovo identificativo del dispositivo")
+    except (OSError, ValueError):
+        pass
+    new = os.urandom(16).hex()
+    _save_instance(new, macs)
+    return new
+
+
+def _save_instance(ident, macs):
+    try:
+        os.makedirs(sysops.STATE_DIR, exist_ok=True)
+        tmp = INSTANCE_FILE + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump({"id": ident, "macs": macs}, f)
+        os.replace(tmp, INSTANCE_FILE)
+    except OSError as exc:
+        log.warning("Identificativo del dispositivo non salvato: %s", exc)
+
+
+def server_error_set(text):
+    """Rifiuto del server da mostrare nella pagina locale (None = tutto a posto)."""
+    try:
+        if text is None:
+            if os.path.exists(SERVER_ERROR_FILE):
+                os.remove(SERVER_ERROR_FILE)
+            return
+        os.makedirs(sysops.STATE_DIR, exist_ok=True)
+        tmp = SERVER_ERROR_FILE + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump({"error": str(text)[:600], "ts": time.time()}, f)
+        os.replace(tmp, SERVER_ERROR_FILE)
+    except OSError:
+        pass
 
 
 class ProbeMoved(HttpError):
@@ -61,6 +136,7 @@ class Http:
 
     def __init__(self):
         self._conn, self._key, self._ctx = None, None, None
+        self._instance = None
 
     def close(self):
         if self._conn is not None:
@@ -95,6 +171,11 @@ class Http:
             path += ("&" if "?" in path else "?") + urlencode(params)
         data = None if body is None else json.dumps(body, separators=(",", ":")).encode()
         headers = {"Accept": "application/json", "User-Agent": "netmon-probe"}
+        if token:                         # identità del dispositivo, solo verso il proprio server
+            if self._instance is None:
+                self._instance = instance_id()
+            headers["X-Netmon-Instance"] = self._instance
+            headers["X-Netmon-Host"] = re.sub(r"[^A-Za-z0-9._-]", "", socket.gethostname())[:60]
         if data is not None:
             headers["Content-Type"] = "application/json"
         if token:
@@ -127,7 +208,14 @@ class Http:
                 if isinstance(moved, str):
                     raise ProbeMoved(moved)
             if resp.status >= 400:
-                raise HttpError(f"{resp.status} {resp.reason}: {raw[:200].decode(errors='replace')}")
+                err = HttpError(f"{resp.status} {resp.reason}: {raw[:200].decode(errors='replace')}")
+                err.status = resp.status
+                if resp.status == 409:        # token usato da un altro dispositivo: il testo del server
+                    try:
+                        err.detail = str((json.loads(raw) or {}).get("detail") or "")
+                    except (ValueError, AttributeError):
+                        err.detail = ""
+                raise err
             return json.loads(raw or b"null")
         raise HttpError("nessuna risposta")
 
@@ -175,10 +263,10 @@ def valid_host(h):
         ipaddress.ip_address(str(h))
         return "%" not in str(h)             # niente zona IPv6 (fe80::1%eth0): testo libero
     except ValueError:
-        return bool(re.match(r"^[A-Za-z0-9][A-Za-z0-9.\-]{0,252}$", str(h)))
+        return bool(re.match(r"^[A-Za-z0-9][A-Za-z0-9.\-]{0,252}\Z", str(h)))     # \Z: niente a capo finale
 
 
-NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 _.\-]{0,39}$")
+NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 _.\-]{0,39}\Z")
 MAX_DEVICES = 200
 # Valori della configurazione che può cambiare il server: tipo e limiti (gli stessi della pagina
 # locale e del server). Un valore fuori limite o del tipo sbagliato non viene applicato.
@@ -2002,6 +2090,8 @@ def main():
     sampler.cfg = cfg
     sampler.start()
     last_contact = time.monotonic()      # ultimo scambio riuscito con il server
+    dup_error = False                    # il server rifiuta i dati: token usato da un altro dispositivo
+    server_error_set(None)
     last_down, last_ok_log, sent_once = None, 0.0, False
     server_ms = None          # durata dell'ultimo invio riuscito (ms): la pagina la mostra come latenza verso la VM
 
@@ -2070,13 +2160,18 @@ def main():
             payload["traffic_more"] = record["traffic_more"] = traffic_by_box
 
         try:
-            flush_buffer(client, cfg)     # prima le misure in attesa, in ordine cronologico
+            if not dup_error:             # rifiutata per token doppio: il buffer aspetta
+                flush_buffer(client, cfg)     # prima le misure in attesa, in ordine cronologico
             t_send = time.monotonic()
             reply = client.request("POST", cfg["server_url"], cfg["token"], payload, timeout=15) or {}
             if not isinstance(reply, dict):
                 raise ValueError("risposta del server non valida")
             server_ms = round((time.monotonic() - t_send) * 1000)
             last_contact = time.monotonic()
+            if dup_error:
+                dup_error = False
+                server_error_set(None)
+                log.info("Il server accetta di nuovo i dati di questa sonda")
             if not sent_once:
                 sent_once = True
                 log.info("Primo invio al server riuscito")
@@ -2098,6 +2193,13 @@ def main():
         except (OSError, ValueError) as exc:
             if isinstance(exc, ProbeMoved):
                 follow_move(cfg, exc.url)
+            elif getattr(exc, "status", None) == 409:
+                # stesso token di un'altra sonda: le misure restano nel buffer (arrivano se l'utente
+                # sceglie questo dispositivo), il messaggio va nella pagina locale
+                if not dup_error:
+                    log.error("Il server rifiuta i dati: %s", getattr(exc, "detail", "") or exc)
+                dup_error = True
+                server_error_set(getattr(exc, "detail", "") or str(exc))
             else:
                 log.error("Invio al server fallito: %s", exc)
             try:
@@ -2130,7 +2232,8 @@ def main():
                     if isinstance(exc, ProbeMoved):
                         follow_move(cfg, exc.url)
                         break                             # riparte subito verso la VM nuova
-                    log.error("Controllo configurazione fallito: %s", exc)
+                    if getattr(exc, "status", None) != 409:   # token doppio: già detto nel report
+                        log.error("Controllo configurazione fallito: %s", exc)
 
 
 if __name__ == "__main__":

@@ -16,7 +16,7 @@
 
 Dipendenze: python3-yaml (già installato per la sonda).
 """
-__version__ = "1.1.20261021-152315"
+__version__ = "1.1.20261021-173644"
 import base64
 import hmac
 import ipaddress
@@ -186,9 +186,10 @@ NUMERIC_LABELS = {"config_poll": "Controllo configurazioni dal server",
                   "stale_seconds": "Sonda in ritardo dopo (secondi)",
                   "offline_seconds": "Sonda irraggiungibile dopo (secondi)"}
 
-NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 _.\-]{0,39}$")
-HOST_RE = re.compile(r"^(?=.{1,253}$)[A-Za-z0-9](?:[A-Za-z0-9\-]{0,61}[A-Za-z0-9])?"
-                     r"(?:\.[A-Za-z0-9](?:[A-Za-z0-9\-]{0,61}[A-Za-z0-9])?)*$")
+# \Z e non $: $ accetta anche un a capo finale («router\n»)
+NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 _.\-]{0,39}\Z")
+HOST_RE = re.compile(r"^(?=.{1,253}\Z)[A-Za-z0-9](?:[A-Za-z0-9\-]{0,61}[A-Za-z0-9])?"
+                     r"(?:\.[A-Za-z0-9](?:[A-Za-z0-9\-]{0,61}[A-Za-z0-9])?)*\Z")
 
 
 def valid_host(h):
@@ -521,6 +522,18 @@ def test_fritz(host, user, password):
         return {"ok": False, "error": text[:200]}
 
 
+def server_error():
+    """Ultimo rifiuto del server scritto dalla sonda (token usato da un altro dispositivo), se recente."""
+    try:
+        with open(os.path.join(sysops.STATE_DIR, "server-error.json"), encoding="utf-8") as f:
+            e = json.load(f)
+        if isinstance(e, dict) and time.time() - float(e.get("ts") or 0) < 900:
+            return str(e.get("error") or "")[:600]
+    except (OSError, ValueError, TypeError):
+        pass
+    return ""
+
+
 def health_url(server_url):
     parts = urlsplit(server_url)
     return urlunsplit((parts.scheme, parts.netloc, "/health", "", ""))
@@ -733,6 +746,7 @@ class Handler(BaseHTTPRequestHandler):
                 safe[k] = MASK if cfg.get(k) else ""
             safe["fritz_more"] = [{**b, "password": MASK if b.get("password") else ""}
                                   for b in cfg.get("fritz_more") or [] if isinstance(b, dict)]
+            safe["server_error"] = server_error()
             self.send_json(safe)
         else:
             self.send_json({"error": "Pagina non trovata"}, 404)
@@ -1387,6 +1401,8 @@ async function load() {
   $("#lim-fritz").textContent = Number(data.fritz_max ?? 4);
   ports.innerHTML = "";
   (data.devices.length ? data.devices : [{ name: "", host: "" }]).forEach(d => addPort(d.name, d.host));
+  // il server rifiuta i dati di questa sonda (token già usato da un altro dispositivo)
+  if (data.server_error) { $("#server-result").className = "result bad"; $("#server-result").textContent = data.server_error; }
   document.title = (data.probe_name || "Sonda") + " · configurazione";
   $("#title").textContent = "Sonda " + (data.probe_name || "di rete");
   const svc = data.service;

@@ -18,7 +18,7 @@ installa-sonda.sh --aggiorna. Con un server vecchio si usa l'aggiornamento dei s
 Log e stato degli aggiornamenti li scrive root in SYS_DIR (cartella di root, qui solo letta):
 nella cartella della sonda, scrivibile dal servizio, root non scrive più nulla.
 """
-__version__ = "1.1.20261022-110218"
+__version__ = "1.1.20261022-110533"
 import base64
 import hashlib
 import json
@@ -35,6 +35,22 @@ STATE_DIR = os.getenv("PROBE_STATE_DIR", "/var/lib/netprobe")
 SYS_DIR = os.getenv("PROBE_SYS_DIR", "/var/lib/netprobe-sys")     # di root: log e stato degli aggiornamenti
 UPDATE_KEY = os.getenv("PROBE_UPDATE_KEY", "/usr/local/share/netmon/update-key.pub")
 MAX_RESPONSE = 8 * 1024 * 1024        # risposte del server lette al massimo fino a qui
+
+# Sonda gestita da un altro sistema (per esempio un'app che la contiene e la avvia): ne dice il nome
+# in NETMON_MANAGED_BY. Lì riavvio, aggiornamenti, reti Wi-Fi e disinstallazione li fa quel sistema:
+# le funzioni qui sotto lo dicono, invece di consigliare sudo e installa-sonda.sh.
+MANAGED_BY = re.sub(r"[^\w .()+-]", "", os.getenv("NETMON_MANAGED_BY", ""))[:40].strip()
+MANAGED_TEXT = {
+    "reboot": lambda n: f"La sonda è gestita da {n}: si riavvia da lì.",
+    "upgrade": lambda n: f"La sonda è gestita da {n}: il sistema si aggiorna da lì.",
+    "update": lambda n: f"La sonda è gestita da {n}: netmon si aggiorna da lì.",
+    "wifi": lambda n: f"La sonda è gestita da {n}: le reti Wi-Fi si gestiscono da lì.",
+    "uninstall": lambda n: f"La sonda è gestita da {n}: si disinstalla da lì.",
+}
+
+
+def managed(kind: str) -> str:
+    return MANAGED_TEXT[kind](MANAGED_BY)
 
 
 def _sys_path(name):
@@ -87,6 +103,8 @@ def can_sudo(cmd) -> bool:
 
 def reboot(delay: float = 3.0) -> tuple[bool, str]:
     """Riavvia la sonda dopo `delay` secondi (il tempo di rispondere o di inviare l'esito)."""
+    if MANAGED_BY:
+        return False, managed("reboot")
     if not can_sudo(REBOOT_CMD):
         return False, SUDOERS_HINT
 
@@ -101,6 +119,8 @@ def reboot(delay: float = 3.0) -> tuple[bool, str]:
 def uninstall(delay: float = 2.0) -> tuple[bool, str]:
     """Toglie netmon dalla sonda, in un'unità systemd separata: ferma anche questa pagina, quindi
     parte dopo `delay` secondi, il tempo di rispondere al browser."""
+    if MANAGED_BY:
+        return False, managed("uninstall")
     if not (os.path.exists(UNINSTALL_SCRIPT) and can_sudo(UNINSTALL_CMD)):
         return False, ("Funzione non ancora installata: aggiorna la sonda una volta con "
                        "sudo bash installa-sonda.sh --aggiorna, oppure disinstalla da lì con --disinstalla.")
@@ -151,6 +171,8 @@ def upgrade_log(max_chars: int = 4000, path: str = UPGRADE_LOG) -> str:
 
 def start_upgrade() -> tuple[bool, str]:
     """Avvia apt update && apt upgrade in background. Non attende la fine."""
+    if MANAGED_BY:
+        return False, managed("upgrade")
     if upgrade_status().get("state") == "running":
         return False, "Un aggiornamento è già in corso."
     if not can_sudo(UPGRADE_CMD):
@@ -439,6 +461,8 @@ def update_from_server(server_url: str, token: str) -> tuple[bool, str, str]:
     """Aggiornamento di netmon dal server: completo (pacchetto netmon.zip firmato dalla VM, come
     installa-sonda.sh --aggiorna) se sonda e server lo permettono, altrimenti solo i programmi.
     Restituisce (esito, messaggio, modo) con modo "zip" oppure "py"."""
+    if MANAGED_BY:
+        return False, managed("update"), "py"
     if not (can_zipupdate() and os.path.exists(UPDATE_KEY)):
         ok, message = self_update(server_url, token)
         return ok, message, "py"
@@ -490,7 +514,10 @@ WIFI_RECHECK = 600        # secondi: un "no" si ricontrolla (un si' resta valido
 
 
 def wifi_problem() -> str:
-    """Perche' la sonda non puo' gestire le reti Wi-Fi ("" se puo'): script, nmcli, permesso sudo."""
+    """Perche' la sonda non puo' gestire le reti Wi-Fi ("" se puo'): gestita da un altro sistema,
+    script, nmcli, permesso sudo."""
+    if MANAGED_BY:
+        return "managed"
     if not os.path.exists(WIFI_SCRIPT):
         return "script"
     if not shutil.which("nmcli"):
@@ -522,6 +549,8 @@ def wifi_status() -> dict:
 
 def start_wifi(request: dict) -> tuple[bool, str]:
     """Scrive la richiesta (solo per la sonda) e avvia lo script di root. Non attende la fine."""
+    if MANAGED_BY:
+        return False, managed("wifi")
     if wifi_status().get("state") == "running":
         return False, "C'è già un'operazione sulle reti Wi-Fi in corso."
     if not can_wifi():

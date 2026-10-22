@@ -16,7 +16,7 @@
 
 Dipendenze: python3-yaml (già installato per la sonda).
 """
-__version__ = "1.1.20261022-110218"
+__version__ = "1.1.20261022-110533"
 import base64
 import hmac
 import ipaddress
@@ -717,6 +717,7 @@ class Handler(BaseHTTPRequestHandler):
                             "upgrade": st, "log": sysops.upgrade_log(6000) if st.get("state") != "none" else "",
                             "selfupdate": nm, "self_log": nm_log,
                             "version": __version__,
+                            "managed_by": sysops.MANAGED_BY or None,
                             "server_version": sysops.server_version(server_url, timeout=4) if server_url else None})
         elif self.path == "/api/backup":
             try:
@@ -1221,7 +1222,7 @@ select.pill:hover{border-color:var(--muted)}
 
   <section aria-labelledby="h-sys">
     <h2 id="h-sys">Sistema</h2>
-    <p class="hint">Gli aggiornamenti si comandano dal pannello di amministrazione del server.</p>
+    <p class="hint" id="sys-hint">Gli aggiornamenti si comandano dal pannello di amministrazione del server.</p>
     <p class="hint" id="sys-versions"></p>
     <div class="panel-actions">
       <button type="button" id="sys-reboot" class="danger">Riavvia la sonda</button>
@@ -1586,6 +1587,7 @@ async function loadSystem() {
     nmWatching = false;
     if (data.version !== nmStartedVersion) return location.reload();
   }
+  if (data.managed_by) return managedBy(data.managed_by);
   $("#sys-reboot").disabled = running || !data.can_reboot;
   if (!data.can_reboot) {
     sysResult("Permessi non configurati: installa /etc/sudoers.d/netprobe come descritto nella guida.", "bad");
@@ -1602,6 +1604,19 @@ async function loadSystem() {
   showLog($("#sys-log-box"), $("#sys-log"), data.log);
   if (up.state === "running") $("#sys-log-box").open = true;
   if (running || nmWatching) { clearTimeout(sysTimer); sysTimer = setTimeout(loadSystem, 3000); }
+}
+
+// Sonda gestita da un altro sistema (NETMON_MANAGED_BY): aggiornamenti, riavvio e disinstallazione
+// li fa quello, quindi niente pulsanti che fallirebbero (e niente consigli su sudo): solo dove farlo
+function managedBy(name) {
+  $("#sys-hint").textContent = `Questa sonda è gestita da ${name}: aggiornamenti, riavvio e disinstallazione si fanno da lì.`;
+  $("#sys-reboot").hidden = true;
+  sysResult("", "");
+  const del = SECTIONS.find(x => x.sec.querySelector("#h-del"));
+  if (del) {
+    del.btn.hidden = true;
+    if (!del.sec.hidden) showSection(SECTIONS[0].key);
+  }
 }
 
 $("#sys-reboot").onclick = async () => {
@@ -1703,7 +1718,7 @@ function setNav(open, remember = true) {
   if (remember) { try { localStorage.setItem("netprobe.nav", open ? "1" : "0"); } catch {} }
 }
 function showSection(key, push = true) {
-  const cur = SECTIONS.find(x => x.key === key) || SECTIONS[0];
+  const cur = SECTIONS.find(x => x.key === key && !x.btn.hidden) || SECTIONS[0];   // nascoste: non si aprono
   SECTIONS.forEach(x => {
     x.sec.hidden = x !== cur;
     x.btn.setAttribute("aria-selected", String(x === cur));
@@ -2575,6 +2590,24 @@ for _it, _tr in {
         ("(what is left for it of your account's total, shared with your other probes).",
          "haben (was ihr vom Gesamtkontingent deines Kontos bleibt, das mit den anderen Sonden geteilt wird).",
          "(la part qui lui reste du total de ton compte, partagé avec tes autres sondes)."),
+}.items():
+    for _lang, _text in zip(("en", "de", "fr"), _tr):
+        TRANSLATIONS[_lang].setdefault(_it, _text)
+
+# Sonda gestita da un altro sistema (sysops.MANAGED_BY): pagina e messaggi delle operazioni
+for _it, _tr in {
+    "Questa sonda è gestita da {0}: aggiornamenti, riavvio e disinstallazione si fanno da lì.":
+        ("This probe is managed by {0}: updates, restart and uninstall are done from there.",
+         "Diese Sonde wird von {0} verwaltet: Updates, Neustart und Deinstallation erfolgen dort.",
+         "Cette sonde est gérée par {0} : mises à jour, redémarrage et désinstallation se font depuis là."),
+    "La sonda è gestita da {0}: si riavvia da lì.":
+        ("The probe is managed by {0}: restart it from there.",
+         "Die Sonde wird von {0} verwaltet: Neustart dort.",
+         "La sonde est gérée par {0} : elle se redémarre depuis là."),
+    "La sonda è gestita da {0}: si disinstalla da lì.":
+        ("The probe is managed by {0}: uninstall it from there.",
+         "Die Sonde wird von {0} verwaltet: Deinstallation dort.",
+         "La sonde est gérée par {0} : elle se désinstalle depuis là."),
 }.items():
     for _lang, _text in zip(("en", "de", "fr"), _tr):
         TRANSLATIONS[_lang].setdefault(_it, _text)

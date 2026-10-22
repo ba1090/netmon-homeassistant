@@ -8,7 +8,7 @@ con cache, buffer letto e scritto a pezzi.
 Dipendenze (Debian, Raspberry Pi OS e simili): sudo apt install python3-yaml
 (fritzconnection, facoltativa, solo per il FRITZ!Box)
 """
-__version__ = "1.1.20261022-110218"
+__version__ = "1.1.20261022-110533"
 import http.client
 import fcntl
 import ipaddress
@@ -1357,6 +1357,8 @@ _remote_cache = {}
 def remote_ops_ok():
     """La sonda può chiedere a root riavvio e aggiornamenti (sudo installato e permessi presenti)?
     Senza, misura e invia lo stesso: mancano solo le operazioni da remoto. Ricontrollato ogni 10 minuti."""
+    if sysops.MANAGED_BY:
+        return False                              # riavvio e aggiornamenti li fa chi gestisce la sonda
     now = time.monotonic()
     if now - _remote_cache.get("at", -1e9) > 600:
         ok = _safe(lambda: bool(shutil.which("sudo")) and sysops.can_sudo(sysops.REBOOT_CMD), False)
@@ -1367,6 +1369,8 @@ def remote_ops_ok():
 def full_update_ok():
     """La sonda sa installare il pacchetto completo dal server (script, verificatore, chiave, sudo)?
     Un "no" si ricontrolla ogni 10 minuti; un "si'" resta valido finche' la sonda gira."""
+    if sysops.MANAGED_BY:
+        return False
     now = time.monotonic()
     if not _full_cache.get("ok") and now - _full_cache.get("at", -1e9) > 600:
         ok = _safe(lambda: sysops.can_zipupdate() and os.path.exists(sysops.UPDATE_KEY), False)
@@ -1380,8 +1384,9 @@ def wifi_state():
     if not _wifi_cache or time.monotonic() - _wifi_cache["at"] > WIFI_EVERY:
         nets = _safe(sysops.wifi_networks, None) or {"nm": False, "known": []}
         cmd = bool(nets["nm"] and _safe(sysops.can_wifi, False))
-        _wifi_cache.update(at=time.monotonic(), nm=nets["nm"], known=nets["known"], cmd=cmd,
-                           why="" if cmd else "nm" if not nets["nm"] else sysops._wifi_cap.get("problem") or "")
+        why = ("" if cmd else "managed" if sysops.MANAGED_BY else "nm" if not nets["nm"]
+               else sysops._wifi_cap.get("problem") or "")
+        _wifi_cache.update(at=time.monotonic(), nm=nets["nm"], known=nets["known"], cmd=cmd, why=why)
     return _wifi_cache
 
 
@@ -1397,6 +1402,9 @@ def static_info():
             "python": platform.python_version(),
             "cpus": os.cpu_count(),
         })
+        if sysops.MANAGED_BY:
+            # il sistema del contenitore non è quello della macchina: si dice chi gestisce la sonda
+            _static["os"] = sysops.MANAGED_BY
         _static["vcgencmd"] = shutil.which("vcgencmd")   # solo Raspberry Pi: altrove nessun processo
         _static["iw"] = shutil.which("iw")
     return _static
@@ -1461,6 +1469,8 @@ def collect_system(cfg):
     info["buffered"] = _safe(buffer_count, 0)
     info["full_update"] = full_update_ok()
     info["remote_ops"] = remote_ops_ok()          # False: manca sudo, niente operazioni da remoto
+    if sysops.MANAGED_BY:
+        info["managed_by"] = sysops.MANAGED_BY    # aggiornamenti, riavvio e Wi-Fi li fa questo sistema
     info["speedtest"] = True                      # la sonda sa eseguire lo speedtest dalla pagina
     info["scan"] = True                           # e il controllo di sicurezza dei dispositivi
     info["scan_modes"] = True                     # con le modalità veloce, standard e approfondito

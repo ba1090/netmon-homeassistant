@@ -12,7 +12,7 @@
   body { font-family: "DejaVu Sans", "Segoe UI", Roboto, Arial, sans-serif; color: var(--ink); font-size: 10.5pt; line-height: 1.5; margin: 0; }
   h1 { font-size: 26pt; line-height: 1.15; color: var(--accent); margin: 0 0 10px; }
   h2 { font-size: 14pt; color: var(--accent); margin: 0 0 10px; display: flex; align-items: center; gap: 10px; }
-  h3 { font-size: 12.5pt; color: var(--accent); margin: 22px 0 8px; }
+  h3 { font-size: 12.5pt; color: var(--accent); margin: 22px 0 8px; break-after: avoid; page-break-after: avoid; }
   .num { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; border-radius: 50%;
          background: var(--accent); color: #fff; font-size: 11pt; flex: none; }
   .page { page-break-after: always; }
@@ -90,7 +90,8 @@
 <section class="page">
   <h2><span class="num">2</span> Copia il token e l'indirizzo del server</h2>
   <p>Compare il <b>token</b>, che comincia con <code>sonda_</code>. Premi <b>Copia</b> e tienilo da parte: <b>si vede una volta
-    sola</b>. Se lo perdi, dalla stessa pagina puoi generarne uno nuovo con <i>Nuovo token</i>.</p>
+    sola</b>. Se lo perdi, dalla stessa pagina puoi generarne uno nuovo con <i>Nuovo token</i>. Ogni sonda ha il suo token:
+    non riusare quello di un Raspberry Pi ancora acceso (vedi <i>Se qualcosa non va</i>).</p>
   <p>Sotto c'è l'<b>indirizzo del server</b> (per esempio <code>https://vm1.netmonhome.net/api/report</code>): al passo 6
     ti serve la parte in mezzo, il dominio, cioè <code>vm1.netmonhome.net</code>.</p>
   <figure><img src="../img/02-netmon-token.png" alt="">
@@ -188,8 +189,9 @@
     <li><b>Aggiornamenti</b>: arrivano come aggiornamenti dell'app in Home Assistant (<i>Impostazioni → Aggiornamenti</i>),
       non dal tasto <i>Aggiorna netmon</i> della pagina di stato. Conviene attivare <i>Aggiornamento automatico</i>
       nella scheda Informazioni dell'app.</li>
-    <li><b>Riavvio e reti Wi-Fi da remoto</b> non ci sono: li gestisce Home Assistant. Anche <i>Disinstalla sonda</i> della
-      pagina locale non serve: si disinstalla l'app.</li>
+    <li><b>Riavvio e reti Wi-Fi</b> li gestisce Home Assistant: la pagina di stato di NetMon, in <i>Stato sonda</i>, mostra
+      dove farlo al posto dei pulsanti, e gli aggiornamenti programmati dall'amministratore saltano questa sonda. Nella
+      pagina locale non ci sono <i>Riavvia la sonda</i> e <i>Disinstalla sonda</i>: si disinstalla l'app.</li>
     <li><b>Server, token e nome</b> si cambiano nella scheda <i>Configurazione</i> dell'app. Un <i>Rinomina</i> fatto dalla
       pagina di stato resta finché non cambi il nome lì.</li>
     <li><b>SpeedTest</b>: a mano e periodici, come sul Raspberry. Se Home Assistant è in Wi-Fi la pagina lo segnala: la
@@ -204,6 +206,10 @@
       nella scheda Configurazione e salva.</td></tr>
     <tr><td>Nel registro: «Invio al server fallito» con 401</td><td>Il token è sbagliato: generane uno nuovo nella pagina di
       stato (<i>Nuovo token</i>) e incollalo nelle opzioni.</td></tr>
+    <tr><td>Nel registro: «Token già in uso da un'altra sonda»</td><td>Il token è di un altro dispositivo, per esempio il
+      Raspberry Pi che l'app sostituisce: nella pagina di stato compare un riquadro giallo, premi <i>Usa il nuovo
+      dispositivo</i>. Se il Raspberry resta acceso, crea invece una sonda nuova e usa il suo token. Serve anche dopo aver
+      ripristinato un backup di Home Assistant su un'altra macchina.</td></tr>
     <tr><td>Nel registro: «Invio al server fallito» con altri errori</td><td>Controlla il dominio nel campo <i>Server</i>
       (per esempio <code>vm1.netmonhome.net</code>, senza <code>https://</code>) e che la pagina di stato si apra dal browser.</td></tr>
     <tr><td>NetMon sonda non compare nell'archivio</td><td>Ricarica la pagina o usa ⋮ → <i>Controlla aggiornamenti</i>;

@@ -16,7 +16,7 @@
 
 Dipendenze: python3-yaml (già installato per la sonda).
 """
-__version__ = "1.1.20261025-142050"
+__version__ = "1.1.20261026-090206"
 import base64
 import hmac
 import ipaddress
@@ -2608,6 +2608,22 @@ for _it, _tr in {
         ("The probe is managed by {0}: uninstall it from there.",
          "Die Sonde wird von {0} verwaltet: Deinstallation dort.",
          "La sonde est gérée par {0} : elle se désinstalle depuis là."),
+}.items():
+    for _lang, _text in zip(("en", "de", "fr"), _tr):
+        TRANSLATIONS[_lang].setdefault(_it, _text)
+
+
+# Testi rimasti senza traduzione (verifica del 26/10/2026)
+for _it, _tr in {
+    "La nuova password deve avere almeno 12 caratteri.": ("The new password must be at least 12 characters long.",
+                                                          "Das neue Passwort muss mindestens 12 Zeichen lang sein.",
+                                                          "Le nouveau mot de passe doit comporter au moins 12 caractères."),
+    "Lingua non valida": ("Invalid language", "Ungültige Sprache", "Langue non valide"),
+    "Impossibile scrivere {0}: {1}": ("Unable to write {0}: {1}", "{0} kann nicht geschrieben werden: {1}", "Impossible d'écrire {0} : {1}"),
+    "errore": ("error", "Fehler", "erreur"),
+    "nome": ("name", "Name", "nom"),
+    "di rete": ("network", "Netzwerk", "réseau"),
+    "Sonda di rete": ("Network probe", "Netzwerksonde", "Sonde réseau"),
 }.items():
     for _lang, _text in zip(("en", "de", "fr"), _tr):
         TRANSLATIONS[_lang].setdefault(_it, _text)

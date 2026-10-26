@@ -16,7 +16,7 @@
 
 Dipendenze: python3-yaml (già installato per la sonda).
 """
-__version__ = "1.1.20261026-090206"
+__version__ = "1.1.20261026-090300"
 import base64
 import hmac
 import ipaddress
@@ -1915,7 +1915,10 @@ I18N_JS = r"""
       if (!v) continue;
       const k = "a:" + a, seen = done.get(e) || {};
       if (seen[k] === v) continue;
-      const t = num(tr(v));
+      let t = tr(v);
+      // suggerimento fatto di più frasi senza una traduzione intera: frase per frase
+      if (t === v && /[.!?]\s/.test(v)) t = v.split(/(?<=[.!?])(\s+)/).map((p, i) => i % 2 ? p : tr(p)).join("");
+      t = num(t);
       if (t !== v) e.setAttribute(a, t);
       seen[k] = t; done.set(e, seen);
     }

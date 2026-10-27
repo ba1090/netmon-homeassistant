@@ -8,7 +8,7 @@ con cache, buffer letto e scritto a pezzi.
 Dipendenze (Debian, Raspberry Pi OS e simili): sudo apt install python3-yaml
 (fritzconnection, facoltativa, solo per il FRITZ!Box)
 """
-__version__ = "1.1.20261026-104239"
+__version__ = "1.1.20261027-160153"
 import http.client
 import fcntl
 import ipaddress
@@ -660,11 +660,13 @@ def _dbm(link):
     return None
 
 
-def parse_mesh(topo):
+def parse_mesh(topo, by_mac=None):
     """Riassunto della mappa mesh del FRITZ!Box: i nodi (FRITZ!Box principale e repeater) con il
     collegamento verso il nodo da cui dipendono e i dispositivi agganciati a ciascuno.
     Velocità in kbit/s (come nel FRITZ!OS), segnale in dBm se il FRITZ lo misura.
-    Ogni campo è facoltativo: un FRITZ!OS diverso non deve far fallire il resto."""
+    Ogni campo è facoltativo: un FRITZ!OS diverso non deve far fallire il resto.
+    by_mac (dict, facoltativo): riempito con MAC -> nodo, banda, segnale e velocità di ogni
+    dispositivo, per l'elenco dei dispositivi in rete. Resta sulla sonda: i MAC non si inviano."""
     nodes = {n.get("uid"): n for n in (topo or {}).get("nodes") or [] if isinstance(n, dict) and n.get("uid")}
     iface_of = {}                                         # uid interfaccia -> (uid nodo, interfaccia)
     for uid, n in nodes.items():
@@ -723,6 +725,9 @@ def parse_mesh(topo):
         node_uid, iface, l, wifi = best
         band = _band(iface) if wifi else "cavo"
         sig, cur = _dbm(l), rate(l, "cur_data_rate")
+        if by_mac is not None and n.get("device_mac_address"):
+            by_mac[str(n["device_mac_address"]).lower()] = {
+                "node": str(nodes[node_uid].get("device_name") or "")[:40], "band": band, "signal": sig, "rate": cur}
         clients[node_uid].append({
             "name": str(n.get("device_name") or n.get("device_mac_address") or "?")[:40],
             "band": band, "rate": cur, "signal": sig,
@@ -738,6 +743,39 @@ def parse_mesh(topo):
                     "parent": str(nodes[parent[uid]].get("device_name") or "")[:40] if parent.get(uid) else "",
                     "clients": cl[:MESH_CLIENTS], "more": max(0, len(cl) - MESH_CLIENTS)})
     return {"nodes": out, "clients": sum(len(clients[u]) for u in parent)}
+
+
+NETDEV_MAX = 200          # dispositivi dell'elenco «Dispositivi in rete» inviati al server
+
+
+def net_devices(hosts, by_mac):
+    """Dispositivi noti al FRITZ!Box per la pagina: nome, IP, collegato o no, cavo o Wi-Fi (porta,
+    nodo della mesh, banda, segnale) e velocità del collegamento in Mbit/s. Prima i collegati.
+    hosts: get_hosts_attributes (o get_hosts_info dei FRITZ!OS vecchi). Il MAC serve solo a unire
+    i due elenchi e non entra nel risultato."""
+    out = []
+    for h in hosts or []:
+        if not isinstance(h, dict):
+            continue
+        mac = str(h.get("MACAddress") or h.get("mac") or "").lower()
+        m = (by_mac or {}).get(mac) or {}
+        itype = str(h.get("InterfaceType") or h.get("interface_type") or "").lower()
+        wifi = itype.startswith("802.11") or (m.get("band") not in (None, "", "cavo"))
+        lan = not wifi and (itype == "ethernet" or m.get("band") == "cavo")
+        active = h.get("Active") in TRUE if "Active" in h else h.get("status") in TRUE
+        speed = _int(h.get("X_AVM-DE_Speed"))
+        rate = round(m["rate"] / 1000) if m.get("rate") else (speed if speed and speed > 0 else None)
+        port = _int(h.get("X_AVM-DE_Port"))
+        out.append({"name": str(h.get("HostName") or h.get("name") or "")[:60],
+                    "ip": str(h.get("IPAddress") or h.get("ip") or "")[:45],
+                    "on": bool(active), "via": "wifi" if wifi else "lan" if lan else "",
+                    "port": port if lan and port and 0 < port < 65 else None,
+                    "node": m.get("node") or None, "band": m.get("band") if wifi else None,
+                    "signal": m.get("signal") if wifi else None, "rate": rate if active else None,
+                    "model": str(h.get("X_AVM-DE_Model") or "")[:60],
+                    "guest": h.get("X_AVM-DE_Guest") in TRUE})
+    out.sort(key=lambda d: (not d["on"], d["name"].lower()))
+    return out[:NETDEV_MAX]
 
 
 def fiber_active(values):
@@ -770,6 +808,7 @@ class Fritz:
         self.static, self.static_at = {}, None
         self.wlan_services, self.wlan_info, self.wlan_at, self.wlans = None, {}, None, None
         self.hosts, self.hosts_at = {}, None
+        self.host_list = None                 # elenco completo dei dispositivi (per «Dispositivi in rete»)
         self.guests, self.guests_count, self.guests_at = None, None, None
         self.addon, self.addon_at = None, None
         self.ext_ip, self.ext_ip_at, self.last_uptime, self.last_connected = None, None, None, None
@@ -922,7 +961,7 @@ class Fritz:
         data["rate_up"] = up * 8 if up is not None else None          # bit/s
         data["rate_down"] = down * 8 if down is not None else None
 
-        if (self.hosts_at is None or mono - self.hosts_at > SLOW_EVERY) and not late():
+        if (self.hosts_at is None or mono - self.hosts_at > MESH_EVERY) and not late():
             hosts = _soft(lambda: self._hosts(fc), None)
             if hosts is not None:
                 self.hosts, self.hosts_at = hosts, mono
@@ -946,14 +985,18 @@ class Fritz:
         # l'ultima ricevuta): la mappa pesa qualche kB, inutile rimandarla a ogni controllo.
         if (self.mesh_at is None or mono - self.mesh_at > MESH_EVERY) and not late():
             self.mesh_at = mono
+            by_mac = {}
             try:
-                mesh = self._mesh(fc)
+                mesh = self._mesh(fc, by_mac)
                 if mesh:
                     data["mesh"] = mesh
             except OSError:
                 raise
             except Exception as exc:  # noqa: BLE001 — FRITZ!OS senza mesh o formato diverso
                 log.info("Mappa mesh del FRITZ!Box non disponibile: %s", exc)
+            # dispositivi in rete: l'elenco del FRITZ!Box completato con la mesh (anche senza mesh)
+            if self.host_list:
+                data["netdev"] = _soft(lambda: net_devices(self.host_list, by_mac), None)
         if (self.fiber_at is None or mono - self.fiber_at > MESH_EVERY) and not late():
             self.fiber_at = mono
             fiber = _soft(lambda: self._fiber(fc), None)
@@ -961,7 +1004,7 @@ class Fritz:
                 data["fiber"] = fiber
         return data
 
-    def _mesh(self, fc):
+    def _mesh(self, fc, by_mac=None):
         """Mappa mesh (JSON) letta dal FRITZ!Box e riassunta da parse_mesh."""
         from fritzconnection.lib.fritzhosts import FritzHosts
         with self.lock:
@@ -971,7 +1014,7 @@ class Fritz:
             else:                                         # fritzconnection precedenti
                 path = fc.call_action("Hosts1", "X_AVM-DE_GetMeshListPath")["NewX_AVM-DE_MeshListPath"]
                 topo = fc.session.get(f"{fc.address}:{fc.port}{path}", timeout=8).json()
-        return parse_mesh(topo)
+        return parse_mesh(topo, by_mac)
 
     def _fiber(self, fc):
         """Stato della linea in fibra (X_AVM-DE_WANFiber1): tutte le azioni Get* senza argomenti.
@@ -999,6 +1042,7 @@ class Fritz:
         try:
             with self.lock:
                 attrs = FritzHosts(fc).get_hosts_attributes()
+            self.host_list = attrs
             active = [h for h in attrs if h.get("Active") in TRUE]
             return {"known": len(attrs), "active": len(active),
                     "lan": sum(1 for h in active if str(h.get("InterfaceType", "")).lower() == "ethernet")}
@@ -1007,6 +1051,7 @@ class Fritz:
         except Exception:  # noqa: BLE001 — FRITZ!OS vecchi: una richiesta per dispositivo
             with self.lock:
                 hosts = FritzHosts(fc).get_hosts_info()
+            self.host_list = hosts
             return {"known": len(hosts), "active": sum(1 for h in hosts if h.get("status")),
                     "lan": sum(1 for h in hosts if h.get("status")
                                and str(h.get("interface_type", "")).lower() == "ethernet")}

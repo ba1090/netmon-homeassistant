@@ -18,7 +18,7 @@ installa-sonda.sh --aggiorna. Con un server vecchio si usa l'aggiornamento dei s
 Log e stato degli aggiornamenti li scrive root in SYS_DIR (cartella di root, qui solo letta):
 nella cartella della sonda, scrivibile dal servizio, root non scrive più nulla.
 """
-__version__ = "1.1.20261026-104239"
+__version__ = "1.1.20261027-160153"
 import base64
 import hashlib
 import json

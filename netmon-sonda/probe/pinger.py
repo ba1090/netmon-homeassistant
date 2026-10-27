@@ -9,7 +9,7 @@ Socket usati, nell'ordine:
 - ICMP "raw" (serve CAP_NET_RAW: il servizio netmon-probe lo concede solo a questo scopo).
 Se nessuno dei due è disponibile, ping_many() restituisce None e la sonda usa il comando ping.
 """
-__version__ = "1.1.20261026-104239"
+__version__ = "1.1.20261027-160153"
 import ipaddress
 import os
 import socket

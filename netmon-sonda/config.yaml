@@ -1,7 +1,7 @@
 # netmon · add-on di Home Assistant con la sonda (la versione è quella di netmon: la aggiorna
 # tools/nuova-versione.py insieme ai programmi copiati in probe/)
 name: NetMon sonda
-version: "1.1.20261027-231050"
+version: "1.1.20261027-231637"
 slug: netmon_sonda
 description: La sonda di netmon dentro Home Assistant, al posto del Raspberry Pi
 url: https://github.com/ba1090/netmon-homeassistant/blob/main/netmon-sonda/DOCS.md

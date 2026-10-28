@@ -47,6 +47,8 @@ altri dispositivi si aggiungono come per il Raspberry:
 - **Aggiornamenti.** Arrivano come aggiornamenti dell'add-on in Home Assistant (*Impostazioni →
   Aggiornamenti*). La sonda dice al server di essere l'app di Home Assistant: gli aggiornamenti
   programmati dal pannello la saltano e *Stato sonda* mostra dove aggiornarla invece dei pulsanti.
+  Dopo un aggiornamento o un riavvio dell'add-on, per 5 minuti la pagina di stato dice la sonda *in
+  ripartenza* invece che in ritardo, e l'avviso «non comunica» non parte.
 - **Riavvio e reti Wi-Fi**: li gestisce Home Assistant (*App → NetMon sonda → Riavvia*;
   *Impostazioni → Sistema → Rete*). Nella pagina locale non ci sono *Riavvia la sonda* e *Disinstalla
   sonda*: si disinstalla l'add-on.

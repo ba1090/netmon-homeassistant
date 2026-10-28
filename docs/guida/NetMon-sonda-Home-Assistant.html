@@ -44,10 +44,11 @@
 <section class="page cover">
   <img src="../img/logo.png" alt="NetMon">
   <h1>Installare la sonda NetMon<br>su Home Assistant</h1>
-  <p class="sub">Guida passo passo, con le schermate · versione 1.1.20261019-170824</p>
+  <p class="sub">Guida passo passo, con le schermate · versione 1.1.20261028-133752</p>
   <div class="box">
     <p>La sonda di NetMon gira dentro Home Assistant come <b>app</b> (add-on), al posto del Raspberry Pi: fa i ping
-      ai dispositivi di casa, legge il FRITZ!Box, fa gli speedtest (anche periodici) e manda tutto al tuo server NetMon.</p>
+      ai dispositivi di casa, legge il FRITZ!Box (anche l'elenco dei dispositivi in rete), fa gli speedtest (anche
+      periodici) e manda tutto al tuo server NetMon.</p>
     <p style="margin-top:12px">Repository: <b>https://github.com/ba1090/netmon-homeassistant</b></p>
   </div>
 </section>
@@ -65,7 +66,7 @@
   <div class="note"><b>App o add-on?</b> Da Home Assistant 2026.2 gli «add-on» si chiamano «app». Nelle versioni precedenti
     il menu è <i>Impostazioni → Componenti aggiuntivi</i> e l'archivio si chiama <i>Archivio dei componenti aggiuntivi</i>:
     i passi sono gli stessi.</div>
-  <div class="note"><b>Sulle immagini.</b> Le schermate di NetMon (passi 1, 2, 9 e 10) sono <b>vere</b>. Quelle di Home
+  <div class="note"><b>Sulle immagini.</b> Le schermate di NetMon (passi 1, 2, 9, 10 e 11) sono <b>vere</b>. Quelle di Home
     Assistant (passi 3–8) sono <b>illustrazioni</b>: sullo schermo voci e aspetto possono essere un po' diversi.</div>
   <h3>In breve</h3>
   <table>
@@ -73,6 +74,8 @@
     <tr><td>Pagina di stato NetMon</td><td>crei la sonda e copi token e indirizzo del server (passi 1–2)</td></tr>
     <tr><td>Home Assistant</td><td>aggiungi il repository, installi, configuri e avvii l'app NetMon sonda (passi 3–8)</td></tr>
     <tr><td>Pagina di stato o pagina locale</td><td>aggiungi i dispositivi da controllare (passi 9–10)</td></tr>
+    <tr><td>Pagina di stato, <i>Stato rete › FRITZ!Box</i></td><td>vedi tutti i dispositivi della rete e metti sotto
+      controllo quelli che ti servono con <b>+ Monitora</b> (passo 11, facoltativo)</td></tr>
   </table>
 </section>
 
@@ -169,6 +172,8 @@
       <code>http://homeassistant.local:8080</code>, con la password del passo 8. Da qui si configura anche il
       <b>FRITZ!Box</b>.</li>
   </ul>
+  <p>La pagina locale è in <b>italiano, inglese, tedesco e francese</b>: la lingua si sceglie dal menu in alto nella pagina.
+    Se hai un FRITZ!Box, il modo più comodo per aggiungere dispositivi è l'elenco <i>Dispositivi in rete</i> del passo 11.</p>
   <p>Quanti dispositivi e FRITZ!Box puoi controllare lo decide il piano del tuo account, in totale per tutte le tue sonde.</p>
   <figure><img src="../img/09-pagina-locale-sonda.png" alt="">
     <figcaption><span class="tag vera">schermata vera</span>pagina locale della sonda, sezione Dispositivi</figcaption></figure>
@@ -179,8 +184,31 @@
   <p>Entro un minuto la sonda e i suoi dispositivi compaiono nella pagina di stato di NetMon. Avvisi, storico, mappa e
     SpeedTest funzionano come con il Raspberry Pi: dal riquadro <b>SpeedTest</b> della Dashboard puoi fare subito il primo
     test con <b>Avvia ora</b>, e in <i>Impostazioni → Controlli</i> attivare gli speedtest periodici.</p>
+  <p>Nella Dashboard il riquadro <b>Disponibilità</b> mostra per ogni dispositivo una riga di caselle, una ogni mezz'ora
+    (<i>24 ore</i>) o ogni 4 ore (<i>7 giorni</i>): verde se ha risposto, giallo se ha perso qualche ping, rosso se non
+    rispondeva. Con <i>Dispositivi</i> scegli quali seguire. In <b>Stato sonda</b> trovi la sonda indicata come
+    <i>gestita da Home Assistant</i>, con gli storici di CPU, memoria e disco.</p>
   <figure><img src="../img/10-netmon-sonda-in-linea.png" alt="">
     <figcaption><span class="tag vera">schermata vera</span>la Dashboard di NetMon con i dispositivi della sonda</figcaption></figure>
+</section>
+
+<section class="page">
+  <h2><span class="num">11</span> Dispositivi in rete dal FRITZ!Box</h2>
+  <p>Se la sonda legge il tuo FRITZ!Box (lo configuri nella pagina locale, passo 9), nella pagina di stato apri
+    <b>Stato rete › FRITZ!Box</b>: sotto i riquadri del FRITZ!Box c'è l'elenco <b>Dispositivi in rete</b>, con tutti i
+    dispositivi che il FRITZ!Box conosce.</p>
+  <ul>
+    <li>per ognuno vedi <b>nome</b>, <b>IP</b>, <b>collegamento</b> (cavo con la porta LAN, oppure Wi-Fi con la banda e il
+      repeater a cui è agganciato), <b>segnale</b> in dBm con le tacche e <b>velocità del collegamento</b> (non il traffico);</li>
+    <li>i filtri <b>Wi-Fi</b>, <b>Cavo</b>, <b>Segnale debole</b> (sotto −75 dBm) e <b>Non monitorati</b>, la ricerca per nome o
+      IP e la casella <i>Mostra anche i non collegati</i>, con da quanto non si vedono;</li>
+    <li><b>+ Monitora</b> apre la finestra <i>Dispositivi</i> della sonda con nome e IP già compilati: basta salvare. I
+      dispositivi già controllati sono segnati con <i>✓ monitorato</i>.</li>
+  </ul>
+  <p>L'elenco si aggiorna ogni 5 minuti e si nasconde da <i>Visualizzazione → Riquadro FRITZ!Box → Dispositivi in rete</i>.
+    Gli indirizzi MAC restano sulla sonda dentro Home Assistant: al server arrivano solo nome, IP e collegamento.</p>
+  <figure><img src="../img/11-netmon-dispositivi-in-rete.png" alt="">
+    <figcaption><span class="tag vera">schermata vera</span>Stato rete › FRITZ!Box → Dispositivi in rete (dati di un server di prova)</figcaption></figure>
 </section>
 
 <section class="page">
@@ -188,9 +216,11 @@
   <ul>
     <li><b>Aggiornamenti</b>: arrivano come aggiornamenti dell'app in Home Assistant (<i>Impostazioni → Aggiornamenti</i>),
       non dal tasto <i>Aggiorna netmon</i> della pagina di stato. Conviene attivare <i>Aggiornamento automatico</i>
-      nella scheda Informazioni dell'app.</li>
-    <li><b>Riavvio e reti Wi-Fi</b> li gestisce Home Assistant: la pagina di stato di NetMon, in <i>Stato sonda</i>, mostra
-      dove farlo al posto dei pulsanti, e gli aggiornamenti programmati dall'amministratore saltano questa sonda. Nella
+      nella scheda Informazioni dell'app. Gli aggiornamenti automatici delle sonde decisi dal server e quelli programmati
+      dall'amministratore saltano questa sonda.</li>
+    <li><b>Riavvio e reti Wi-Fi</b> li gestisce Home Assistant: la pagina di stato di NetMon, in <i>Stato sonda</i> e nel
+      comando <i>Reti Wi-Fi</i> di <i>Impostazioni → Sonde</i>, dice che la sonda è gestita da Home Assistant al posto dei
+      pulsanti. Nella
       pagina locale non ci sono <i>Riavvia la sonda</i> e <i>Disinstalla sonda</i>: si disinstalla l'app.</li>
     <li><b>Server, token e nome</b> si cambiano nella scheda <i>Configurazione</i> dell'app. Un <i>Rinomina</i> fatto dalla
       pagina di stato resta finché non cambi il nome lì.</li>

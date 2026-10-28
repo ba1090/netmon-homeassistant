@@ -2,7 +2,8 @@
 
 La sonda di netmon dentro Home Assistant, al posto del Raspberry Pi. È lo stesso programma della
 sonda (`probe.py` e la pagina locale): fa i ping ai dispositivi di casa, legge il FRITZ!Box, fa gli
-speedtest e i controlli delle porte chiesti dalla pagina di stato e manda tutto al tuo server
+speedtest e i controlli delle porte chiesti dalla pagina di stato (per i dispositivi scelti anche
+quando il ping fallisce) e manda tutto al tuo server
 NetMon. Avvisi, storico e pagina di stato restano sul server come sempre.
 
 ## Installazione

@@ -8,7 +8,7 @@ con cache, buffer letto e scritto a pezzi.
 Dipendenze (Debian, Raspberry Pi OS e simili): sudo apt install python3-yaml
 (fritzconnection, facoltativa, solo per il FRITZ!Box)
 """
-__version__ = "1.1.20261028-151758"
+__version__ = "1.1.20261028-154150"
 import http.client
 import fcntl
 import ipaddress
@@ -1519,6 +1519,7 @@ def collect_system(cfg):
     info["speedtest"] = True                      # la sonda sa eseguire lo speedtest dalla pagina
     info["scan"] = True                           # e il controllo di sicurezza dei dispositivi
     info["scan_modes"] = True                     # con le modalità veloce, standard e approfondito
+    info["port_check"] = True                     # e le porte già viste aperte quando il ping fallisce
     w = wifi_state()
     info["wifi_nm"], info["wifi_cmd"], info["wifi_known"], info["wifi_why"] = w["nm"], w["cmd"], w["known"], w["why"]
     up = _safe(sysops.upgrade_status, {}) or {}
@@ -1882,6 +1883,47 @@ TLS_PORTS = (443, 8443)
 _scan_req = {}                  # richiesta in attesa: {"id", "host", "mode"}
 _scan_done = set()              # richieste già eseguite
 _scan_job = [None]              # thread del controllo in corso
+_port_check = {}                # {dispositivo: porte} da provare quando il ping fallisce (dal server)
+PORTCHECK_TIMEOUT = 1.0         # secondi per porta
+PORTCHECK_BUDGET = 8.0          # secondi in tutto per ciclo, per non ritardare il report
+
+
+def port_check_set(raw):
+    """Porte da provare quando il ping fallisce, come le manda il server (solo dispositivi scelti)."""
+    if not isinstance(raw, dict):
+        return
+    out = {}
+    for name, ports in list(raw.items())[:200]:
+        if isinstance(name, str) and isinstance(ports, list):
+            ok = [p for p in ports[:5] if isinstance(p, int) and not isinstance(p, bool) and 0 < p < 65536]
+            if ok:
+                out[name[:40]] = ok
+    _port_check.clear()
+    _port_check.update(out)
+
+
+def port_check(devices, down):
+    """Per i dispositivi che non rispondono al ping: la prima porta (tra quelle già viste aperte)
+    che accetta una connessione. Solo indirizzi della rete di casa, come il controllo di sicurezza."""
+    found, deadline = {}, time.monotonic() + PORTCHECK_BUDGET
+    for name in down:
+        ports = _port_check.get(name)
+        if not ports or name not in devices:
+            continue
+        try:
+            ip = scan_target(str(devices[name]))
+        except (ValueError, OSError):
+            continue
+        for port in ports:
+            if time.monotonic() > deadline:
+                return found
+            try:
+                socket.create_connection((ip, port), timeout=PORTCHECK_TIMEOUT).close()
+            except OSError:
+                continue
+            found[name] = port
+            break
+    return found
 _scan_result = [None]           # risultato da inviare finché il server non lo conferma
 
 
@@ -2182,6 +2224,8 @@ def main():
         scan = _safe(scan_step, None)      # controllo di sicurezza: gira in un thread a parte
 
         measured = {n: {"ok": ok, "host": str(devices[n]), "rtt": rtt} for n, (ok, rtt) in results.items()}
+        for n, port in (_safe(lambda: port_check(devices, down), {}) or {}).items():
+            measured[n]["port"] = port              # niente ping, ma il servizio risponde
         record = {"ts": time.time(), "devices": measured}
         payload = {"probe": cfg["probe_name"], "interval": cfg["interval"],
                    "thresholds": thresholds(cfg), "config_rev": int(cfg["config_rev"]),
@@ -2235,6 +2279,7 @@ def main():
             speedtest_requested(reply.get("speedtest"))
             scan_acked(reply.get("scan_ack"))
             scan_requested(reply.get("scan"))
+            port_check_set(reply.get("port_check") or {})
             server_rev = int(reply.get("config_rev") or 0)
             if reply.get("config") and server_rev > int(cfg["config_rev"]):
                 cfg = apply_remote_config(cfg, reply["config"], server_rev)

@@ -53,7 +53,8 @@ altri dispositivi si aggiungono come per il Raspberry:
 - **Riavvio e reti Wi-Fi**: li gestisce Home Assistant (*App → NetMon sonda → Riavvia*;
   *Impostazioni → Sistema → Rete*). Nella pagina locale non ci sono *Riavvia la sonda* e *Disinstalla
   sonda*: si disinstalla l'add-on.
-- **Server e token** si cambiano nelle opzioni dell'add-on. Il **nome** pure; un *Rinomina* fatto
+- **Server e token** si cambiano nelle opzioni dell'add-on (il comando *Indirizzo del server* della pagina di
+  stato non vale per l'add-on: le opzioni lo rimetterebbero al riavvio). Il **nome** pure; un *Rinomina* fatto
   dalla pagina di stato resta finché non cambi il nome nelle opzioni.
 - **Dati**: configurazione, misure non ancora inviate e password stanno nella cartella dell'add-on
   e restano tra un aggiornamento e l'altro (e nei backup di Home Assistant).

@@ -8,7 +8,7 @@ con cache, buffer letto e scritto a pezzi.
 Dipendenze (Debian, Raspberry Pi OS e simili): sudo apt install python3-yaml
 (fritzconnection, facoltativa, solo per il FRITZ!Box)
 """
-__version__ = "1.1.20261028-232258"
+__version__ = "1.1.20261029-085503"
 import http.client
 import fcntl
 import ipaddress
@@ -424,14 +424,22 @@ def is_local_host(host):
         return host == "localhost" or host.endswith(LOCAL_SUFFIXES)
 
 
-def follow_move(cfg, url):
-    """Scrive in config.yaml il nuovo indirizzo del server (utente spostato su un'altra VM). Il token
-    resta lo stesso; la configurazione si ricarica al giro successivo. Solo un indirizzo dei report
-    diverso da quello attuale, con la stessa regola della pagina locale: https:// sempre, http://
-    solo verso la rete locale (altrimenti il token viaggerebbe in chiaro su Internet)."""
-    u = urlsplit(url)
-    if (u.scheme not in ("http", "https") or not u.hostname or not u.path.endswith("/api/report") or u.query
-            or (u.scheme == "http" and not is_local_host(u.hostname))):
+def valid_server_url(url):
+    """Indirizzo dei report accettabile, con la stessa regola della pagina locale: https:// sempre,
+    http:// solo verso la rete locale (altrimenti il token viaggerebbe in chiaro su Internet)."""
+    try:
+        u = urlsplit(url)
+    except ValueError:
+        return False
+    return not (u.scheme not in ("http", "https") or not u.hostname or not u.path.endswith("/api/report") or u.query
+                or u.username or (u.scheme == "http" and not is_local_host(u.hostname)))
+
+
+def follow_move(cfg, url, why="account spostato su un'altra VM"):
+    """Scrive in config.yaml il nuovo indirizzo del server (utente spostato su un'altra VM, o indirizzo
+    cambiato dalla pagina del server). Il token resta lo stesso; la configurazione si ricarica al giro
+    successivo. Solo un indirizzo dei report valido e diverso da quello attuale."""
+    if not valid_server_url(url):
         log.error("Indirizzo di spostamento non valido ricevuto dal server: %r", url[:200])
         return
     if url == cfg.get("server_url"):
@@ -443,7 +451,7 @@ def follow_move(cfg, url):
         folder = os.path.dirname(CONFIG_PATH) or "."
         tmp = os.path.join(folder, ".config-move.tmp")
         with open(tmp, "w", encoding="utf-8") as f:
-            f.write("# Indirizzo del server cambiato dal server (account spostato su un'altra VM)\n"
+            f.write(f"# Indirizzo del server cambiato dal server ({why})\n"
                     + yaml.safe_dump(data, allow_unicode=True, sort_keys=False))
         os.chmod(tmp, 0o640)
         os.replace(tmp, CONFIG_PATH)
@@ -451,6 +459,66 @@ def follow_move(cfg, url):
         log.error("Nuovo indirizzo del server (%s) non salvato: %s", url, exc)
         return
     log.warning("Il server ha spostato questa sonda: ora scrive a %s", url)
+
+
+# Indirizzo del server cambiato dalla pagina dell'utente: la sonda prova prima il nuovo indirizzo con
+# il suo token; dice l'esito al server attuale e, solo se quel server l'ha accettata, ci passa.
+_server_change = {}          # {"id", "url", "ok", "error", "sent"}
+
+
+def server_check(url, cfg):
+    """(True, "") se il server a quell'indirizzo riconosce il token di questa sonda, altrimenti (False, motivo)."""
+    if not valid_server_url(url):
+        return False, "indirizzo non valido (serve https://; http:// solo nella rete di casa)"
+    client = Http()
+    try:
+        client.request("GET", url.rsplit("/api/report", 1)[0] + "/api/probe-config", cfg["token"], timeout=10,
+                       params={"probe": cfg["probe_name"], "rev": int(cfg["config_rev"])})
+    except ProbeMoved as exc:
+        return False, f"quel server dice che la sonda appartiene a {urlsplit(exc.url).netloc}"
+    except HttpError as exc:
+        status = getattr(exc, "status", None)
+        if status in (401, 403):
+            return False, "quel server non riconosce il token di questa sonda"
+        if status == 404:
+            return False, "a quell'indirizzo non risponde un server netmon"
+        return False, f"server non raggiungibile ({str(exc)[:120]})"
+    except (OSError, ValueError) as exc:
+        return False, f"server non raggiungibile ({str(exc)[:120]})"
+    finally:
+        client.close()
+    return True, ""
+
+
+def server_change_requested(req, cfg):
+    if not isinstance(req, dict) or not req.get("id") or str(req["id"])[:40] == _server_change.get("id"):
+        return
+    url = str(req.get("url") or "")[:300]
+    ok, error = server_check(url, cfg)
+    _server_change.clear()
+    _server_change.update(id=str(req["id"])[:40], url=url, ok=ok, error=error, sent=False)
+    if ok:
+        log.warning("Nuovo indirizzo del server accettato da %s: ci passo dopo averlo detto al server attuale", url)
+    else:
+        log.error("Nuovo indirizzo del server %s non usato: %s", url, error)
+
+
+def server_change_status():
+    """Esito da mandare al server attuale, finché non l'ha confermato."""
+    if not _server_change or _server_change.get("sent"):
+        return None
+    return {k: _server_change[k] for k in ("id", "ok", "error")}
+
+
+def server_change_acked(cfg, ack):
+    """Il server attuale ha ricevuto l'esito: se era positivo, da qui in poi si scrive al nuovo."""
+    if not _server_change or ack != _server_change.get("id") or _server_change.get("sent"):
+        return False
+    _server_change["sent"] = True
+    if _server_change.get("ok"):
+        follow_move(cfg, _server_change["url"], "cambiato dalla pagina del server")
+        return True
+    return False
 
 
 def config_url(cfg):
@@ -1520,6 +1588,7 @@ def collect_system(cfg):
     info["scan"] = True                           # e il controllo di sicurezza dei dispositivi
     info["scan_modes"] = True                     # con le modalità veloce, standard e approfondito
     info["port_check"] = True                     # e le porte già viste aperte quando il ping fallisce
+    info["server_change"] = True                  # e il nuovo indirizzo del server chiesto dalla pagina
     w = wifi_state()
     info["wifi_nm"], info["wifi_cmd"], info["wifi_known"], info["wifi_why"] = w["nm"], w["cmd"], w["known"], w["why"]
     up = _safe(sysops.upgrade_status, {}) or {}
@@ -2246,6 +2315,8 @@ def main():
         status_cmd = _safe(command_status, None)
         if status_cmd:
             payload["command_status"] = status_cmd
+        if status_sc := server_change_status():
+            payload["server_change"] = status_sc
         if speed:
             payload["speedtest"] = speed
         if scan:
@@ -2280,12 +2351,16 @@ def main():
             scan_acked(reply.get("scan_ack"))
             scan_requested(reply.get("scan"))
             port_check_set(reply.get("port_check") or {})
+            _safe(lambda: server_change_requested(reply.get("server_change"), cfg), None)
             server_rev = int(reply.get("config_rev") or 0)
             if reply.get("config") and server_rev > int(cfg["config_rev"]):
                 cfg = apply_remote_config(cfg, reply["config"], server_rev)
                 mtime = os.path.getmtime(CONFIG_PATH)
                 log.info("Configurazione aggiornata dal server (rev %d): %d dispositivi, ogni %ss",
                          server_rev, len(cfg["devices"]), cfg["interval"])
+            if server_change_acked(cfg, reply.get("server_change_ack")):
+                cfg = load_config()           # da qui si scrive al nuovo indirizzo
+                mtime = os.path.getmtime(CONFIG_PATH)
             if speed and reply.get("speedtest_ack") != speed["id"]:
                 log.warning("Risultato dello speedtest non confermato dal server")
             # Se il server è indietro o non ha ancora la configurazione, gliela mando

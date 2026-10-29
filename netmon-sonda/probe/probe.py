@@ -8,7 +8,7 @@ con cache, buffer letto e scritto a pezzi.
 Dipendenze (Debian, Raspberry Pi OS e simili): sudo apt install python3-yaml
 (fritzconnection, facoltativa, solo per il FRITZ!Box)
 """
-__version__ = "1.1.20261029-085503"
+__version__ = "1.1.20261029-114152"
 import http.client
 import fcntl
 import ipaddress
@@ -479,7 +479,7 @@ def server_check(url, cfg):
     except HttpError as exc:
         status = getattr(exc, "status", None)
         if status in (401, 403):
-            return False, "quel server non riconosce il token di questa sonda"
+            return False, "quel server non riconosce il token di questa sonda: prima importa lì l'utente (Esporta e Importa un utente nel pannello) oppure crea lì una sonda nuova"
         if status == 404:
             return False, "a quell'indirizzo non risponde un server netmon"
         return False, f"server non raggiungibile ({str(exc)[:120]})"

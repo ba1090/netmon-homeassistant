@@ -44,7 +44,7 @@
 <section class="page cover">
   <img src="../img/logo.png" alt="NetMon">
   <h1>Installare la sonda NetMon<br>su Home Assistant</h1>
-  <p class="sub">Guida passo passo, con le schermate · versione 1.1.20261028-133752</p>
+  <p class="sub">Guida passo passo, con le schermate · versione 1.1.20261029-154936</p>
   <div class="box">
     <p>La sonda di NetMon gira dentro Home Assistant come <b>app</b> (add-on), al posto del Raspberry Pi: fa i ping
       ai dispositivi di casa, legge il FRITZ!Box (anche l'elenco dei dispositivi in rete), fa gli speedtest (anche
@@ -222,8 +222,12 @@
       comando <i>Reti Wi-Fi</i> di <i>Impostazioni → Sonde</i>, dice che la sonda è gestita da Home Assistant al posto dei
       pulsanti. Nella
       pagina locale non ci sono <i>Riavvia la sonda</i> e <i>Disinstalla sonda</i>: si disinstalla l'app.</li>
-    <li><b>Server, token e nome</b> si cambiano nella scheda <i>Configurazione</i> dell'app. Un <i>Rinomina</i> fatto dalla
-      pagina di stato resta finché non cambi il nome lì.</li>
+    <li><b>Server, token e nome</b> si cambiano nella scheda <i>Configurazione</i> dell'app. Il comando <i>Indirizzo del
+      server</i> di <i>Impostazioni → Sonde</i> non vale per questa sonda: la pagina di stato lo dice e rimanda all'app. Un
+      <i>Rinomina</i> fatto dalla pagina di stato resta finché non cambi il nome lì.</li>
+    <li><b>Porte quando il ping fallisce</b>: come sul Raspberry. Nella finestra dello scudo 🛡 di un dispositivo puoi attivare
+      <i>Se il ping fallisce, prova le porte aperte</i>: un dispositivo che non risponde al ping ma ha una porta aperta resta
+      in giallo invece di dare l'avviso.</li>
     <li><b>SpeedTest</b>: a mano e periodici, come sul Raspberry. Se Home Assistant è in Wi-Fi la pagina lo segnala: la
       velocità misurata dipende anche dal Wi-Fi.</li>
     <li><b>Dati</b>: configurazione, misure non ancora inviate e password restano tra un aggiornamento e l'altro e

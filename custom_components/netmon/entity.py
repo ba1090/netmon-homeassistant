@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable, Iterable
 from typing import Any
 
+from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import callback
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity import Entity
@@ -15,6 +16,16 @@ from .const import DOMAIN
 from .coordinator import NetMonCoordinator
 
 
+def device_id(entry: ConfigEntry, probe: str, device: str | None = None) -> str:
+    """Identificativo del dispositivo di Home Assistant: la sonda, o un dispositivo che controlla."""
+    base = f"{entry.unique_id or entry.entry_id}|{probe}"
+    return base if device is None else f"{base}|{device}"
+
+
+def unique_id(entry: ConfigEntry, probe: str, key: str, device: str | None = None) -> str:
+    return f"{device_id(entry, probe, device)}|{key}"
+
+
 class NetMonEntity(CoordinatorEntity[NetMonCoordinator]):
     _attr_has_entity_name = True
 
@@ -22,9 +33,9 @@ class NetMonEntity(CoordinatorEntity[NetMonCoordinator]):
         super().__init__(coordinator)
         self.probe_key = probe
         self.device_name = device
-        base = coordinator.config_entry.unique_id or coordinator.config_entry.entry_id
-        probe_id = f"{base}|{probe}"
-        self._attr_unique_id = f"{probe_id}|{device}|{key}" if device is not None else f"{probe_id}|{key}"
+        entry = coordinator.config_entry
+        probe_id = device_id(entry, probe)
+        self._attr_unique_id = unique_id(entry, probe, key, device)
         p = self.probe or {}
         if device is None:
             system = p.get("system") or {}
@@ -34,7 +45,7 @@ class NetMonEntity(CoordinatorEntity[NetMonCoordinator]):
                 configuration_url=coordinator.client.url)
         else:
             self._attr_device_info = DeviceInfo(
-                identifiers={(DOMAIN, f"{probe_id}|{device}")}, name=device, manufacturer="NetMon",
+                identifiers={(DOMAIN, device_id(entry, probe, device))}, name=device, manufacturer="NetMon",
                 model="Dispositivo controllato", via_device=(DOMAIN, probe_id))
 
     @property
@@ -53,22 +64,20 @@ class NetMonEntity(CoordinatorEntity[NetMonCoordinator]):
 
 
 def add_dynamic(coordinator: NetMonCoordinator, async_add_entities: AddEntitiesCallback,
-                build: Callable[[dict[str, Any], Callable[[tuple], bool]], Iterable[Entity]]) -> Callable[[], None]:
-    """Aggiunge le entità che `build` crea dallo stato, anche quelle che compaiono dopo (sonde o
-    dispositivi nuovi). `build` riceve anche `is_new(chiave)`: crea un'entità solo per le chiavi mai
-    viste, così a ogni aggiornamento non si costruiscono di nuovo tutte. Restituisce la funzione per
-    smettere di ascoltare."""
-    known: set[tuple] = set()
-
-    def is_new(key: tuple) -> bool:
-        if key in known:
-            return False
-        known.add(key)
-        return True
+                build: Callable[[dict[str, Any]], Iterable[tuple[str, Callable[[], Entity]]]]) -> Callable[[], None]:
+    """Aggiunge le entità che lo stato descrive, anche quelle che compaiono dopo (sonde o dispositivi
+    nuovi). `build` dà coppie (unique_id, costruttore): l'entità si costruisce solo per gli
+    unique_id mai visti, così a ogni aggiornamento non si ricreano tutte. Restituisce la funzione
+    per smettere di ascoltare."""
+    known: set[str] = set()
 
     @callback
     def update() -> None:
-        new = list(build(coordinator.data or {}, is_new))
+        new = []
+        for uid, make in build(coordinator.data or {}):
+            if uid not in known:
+                known.add(uid)
+                new.append(make())
         if new:
             async_add_entities(new)
 

@@ -151,14 +151,13 @@ def read_config():
     try:
         with open(CONFIG, encoding="utf-8") as f:
             cfg = yaml.safe_load(f)
+        if cfg is None or isinstance(cfg, dict):
+            return cfg or {}
+        err = "non è un elenco di impostazioni"
     except FileNotFoundError:
         return {}
     except (OSError, ValueError, yaml.YAMLError) as exc:
-        cfg, err = None, exc
-    else:
-        err = None if isinstance(cfg, dict) or cfg is None else "non è un elenco di impostazioni"
-    if err is None:
-        return cfg or {}
+        err = exc
     aside = f"{CONFIG}.danneggiato-{time.strftime('%Y%m%d-%H%M%S')}"
     try:
         os.replace(CONFIG, aside)
@@ -212,19 +211,6 @@ def web_port(opts):
     except (TypeError, ValueError):
         port = WEB_PORT
     return port if 1024 <= port <= 65535 else WEB_PORT
-
-
-def listen(port):
-    """Porta della pagina locale tenuta aperta da qui, come netmon-config.socket sul Raspberry."""
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    try:
-        sock.bind(("0.0.0.0", port))
-        sock.listen(64)
-    except OSError:
-        sock.close()
-        raise
-    return sock
 
 
 def start_page(sock, env):
@@ -298,7 +284,8 @@ def main():
             page = None
         if sock is None and now >= listen_at:
             try:
-                sock = listen(port)
+                # porta tenuta aperta da qui, come netmon-config.socket sul Raspberry
+                sock = socket.create_server(("0.0.0.0", port), backlog=64)
                 log(f"Pagina locale su http://{socket.gethostname()}:{port} (o l'IP di Home Assistant): "
                     "parte alla prima visita")
             except OSError as exc:
@@ -313,15 +300,14 @@ def main():
             readable = []
         if readable and not stopping:
             page = start_page(sock, env)
-    for proc in (probe, page):
-        if proc is not None:
-            proc.terminate()
-    for proc in (probe, page):
-        if proc is not None:
-            try:
-                proc.wait(timeout=10)
-            except subprocess.TimeoutExpired:
-                proc.kill()
+    procs = [p for p in (probe, page) if p is not None]
+    for proc in procs:
+        proc.terminate()
+    for proc in procs:
+        try:
+            proc.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            proc.kill()
 
 
 if __name__ == "__main__":

@@ -1,6 +1,7 @@
 """Sonde e dispositivi in linea, e connessione a Internet del FRITZ!Box."""
 from __future__ import annotations
 
+from functools import partial
 from typing import Any
 
 from homeassistant.components.binary_sensor import BinarySensorDeviceClass, BinarySensorEntity
@@ -8,22 +9,20 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from . import NetMonConfigEntry
-from .entity import NetMonEntity, add_dynamic
+from .entity import NetMonEntity, add_dynamic, unique_id
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: NetMonConfigEntry,
                             async_add_entities: AddEntitiesCallback) -> None:
     coordinator = entry.runtime_data
 
-    def build(data: dict[str, Any], is_new):
+    def build(data: dict[str, Any]):
         for key, p in data.get("probes", {}).items():
-            if is_new((key, "online")):
-                yield ProbeOnline(coordinator, key, "online")
-            if "connected" in (p.get("fritz") or {}) and is_new((key, "fritz_internet")):
-                yield FritzInternet(coordinator, key, "fritz_internet")
+            yield unique_id(entry, key, "online"), partial(ProbeOnline, coordinator, key, "online")
+            if "connected" in (p.get("fritz") or {}):
+                yield unique_id(entry, key, "fritz_internet"), partial(FritzInternet, coordinator, key, "fritz_internet")
             for name in p["by_name"]:
-                if is_new((key, name, "online")):
-                    yield DeviceOnline(coordinator, key, "online", name)
+                yield unique_id(entry, key, "online", name), partial(DeviceOnline, coordinator, key, "online", name)
 
     entry.async_on_unload(add_dynamic(coordinator, async_add_entities, build))
 

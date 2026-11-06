@@ -5,7 +5,6 @@ sbagliata senza tentativi ripetuti, eliminazione dei dispositivi tolti e credenz
 Servono homeassistant, pytest e pytest-asyncio (vedi tests/LEGGIMI.md)."""
 import asyncio
 import os
-import stat
 import sys
 from pathlib import Path
 
@@ -20,9 +19,7 @@ from homeassistant.helpers import aiohttp_client, frame  # noqa: E402
 from homeassistant.helpers import (area_registry, category_registry, device_registry as dr,  # noqa: E402
                                    entity_registry as er, floor_registry, issue_registry, label_registry)
 
-ROOT = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(ROOT / "tests"))
-from fakeserver import FakeServer  # noqa: E402
+from conftest import ROOT  # noqa: E402
 
 PW_A, PW_B = "Password-A-123!", "Password-B-456!"
 
@@ -32,15 +29,15 @@ def report(srv, key, devices, **extra):
 
 
 @pytest.fixture
-def server():
-    with FakeServer() as srv:
-        srv.state.add_account("a@example.test", PW_A, probes=("p_casa",))
-        srv.state.add_account("b@example.test", PW_B, probes=("p_altrui",))
-        report(srv, "p_casa", {"Router": {"ok": True, "host": "192.168.1.1", "rtt": 1.5},
-                               "NAS": {"ok": False, "host": "192.168.1.10"}},
-               system={"version": "1.1", "managed_by": "Home Assistant", "load1": 0.2})
-        report(srv, "p_altrui", {"Segreto": {"ok": True, "host": "10.0.0.9", "rtt": 3}})
-        yield srv
+def server(server):
+    """Il server finto di conftest con due account, ognuno con la sua sonda."""
+    server.state.add_account("a@example.test", PW_A, probes=("p_casa",))
+    server.state.add_account("b@example.test", PW_B, probes=("p_altrui",))
+    report(server, "p_casa", {"Router": {"ok": True, "host": "192.168.1.1", "rtt": 1.5},
+                              "NAS": {"ok": False, "host": "192.168.1.10"}},
+           system={"version": "1.1", "managed_by": "Home Assistant", "load1": 0.2})
+    report(server, "p_altrui", {"Segreto": {"ok": True, "host": "10.0.0.9", "rtt": 3}})
+    return server
 
 
 class Resolver(aiohttp.ThreadedResolver):
@@ -78,10 +75,6 @@ async def configure(hass, url, email, password):
     r = await hass.config_entries.flow.async_init("netmon", context={"source": "user"})
     return await hass.config_entries.flow.async_configure(
         r["flow_id"], {"url": url, "email": email, "password": password, "verify_ssl": True})
-
-
-def logins(srv):
-    return srv.state.requests
 
 
 async def test_setup_and_account_isolation(hass, server):
@@ -181,23 +174,25 @@ async def test_removed_device_can_be_deleted(hass, server):
     assert await async_remove_config_entry_device(hass, entry, router) is False
 
 
-async def test_move_to_http_refused(hass, monkeypatch):
+async def test_move_to_http_refused(monkeypatch):
     """Da https non si segue un indirizzo http: email e password viaggerebbero in chiaro."""
-    from custom_components.netmon import config_flow
-    from custom_components.netmon.api import NetMonMoved
-    tried = []
+    from custom_components.netmon.api import NetMonClient, NetMonError, NetMonMoved
+    sent = []
 
-    class Client:
-        def __init__(self, session, url, email, password):
-            tried.append(url)
+    async def fake_request(self, method, path, **kwargs):
+        sent.append(self.url + path)
+        return 410, {"moved": self.next_url}, None
 
-        async def status(self):
-            raise NetMonMoved("http://vm2.example.test")
-
-    monkeypatch.setattr(config_flow, "NetMonClient", Client)
-    r = await configure(hass, "vm1.example.test", "a@example.test", PW_A)
-    assert r["errors"] == {"base": "cannot_connect"}
-    assert tried == ["https://vm1.example.test"]
+    monkeypatch.setattr(NetMonClient, "_request", fake_request)
+    client = NetMonClient(None, "https://vm1.example.test", "a@example.test", PW_A)
+    client.next_url = "http://vm2.example.test"
+    with pytest.raises(NetMonError, match="non cifrato") as exc:
+        await client.login()
+    assert not isinstance(exc.value, NetMonMoved)
+    # verso un altro indirizzo https lo spostamento si segue
+    client.next_url = "https://vm2.example.test"
+    with pytest.raises(NetMonMoved):
+        await client.login()
 
 
 async def test_new_entities_created_once(hass, server):

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import partial
 from typing import Any
 
 from homeassistant.components.sensor import (SensorDeviceClass, SensorEntity, SensorEntityDescription,
@@ -12,7 +13,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from . import NetMonConfigEntry
 from .coordinator import NetMonCoordinator
-from .entity import NetMonEntity, add_dynamic
+from .entity import NetMonEntity, add_dynamic, unique_id
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -70,14 +71,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: NetMonConfigEntry,
                             async_add_entities: AddEntitiesCallback) -> None:
     coordinator = entry.runtime_data
 
-    def build(data: dict[str, Any], is_new):
+    def build(data: dict[str, Any]):
         for key, p in data.get("probes", {}).items():
             for desc in PROBE_SENSORS:
-                if (p.get(desc.section) or {}).get(desc.field) is not None and is_new((key, desc.key)):
-                    yield ProbeSensor(coordinator, key, desc)
+                if (p.get(desc.section) or {}).get(desc.field) is not None:
+                    yield unique_id(entry, key, desc.key), partial(ProbeSensor, coordinator, key, desc)
             for name in p["by_name"]:
-                if is_new((key, name, "rtt")):
-                    yield DeviceRtt(coordinator, key, "rtt", name)
+                yield unique_id(entry, key, "rtt", name), partial(DeviceRtt, coordinator, key, "rtt", name)
 
     entry.async_on_unload(add_dynamic(coordinator, async_add_entities, build))
 

@@ -23,8 +23,8 @@ def probes_of(srv, cookie):
 
 def test_addon_on_real_server_isolated(real, make_addon):
     cookie_a, tok_a = real.account("a@example.test")
-    cookie_b, tok_b = real.account("b@example.test")
-    key_a, key_b = next(iter(tok_a)), next(iter(tok_b))
+    cookie_b, _ = real.account("b@example.test")
+    key_a = next(iter(tok_a))
     make_addon({"server": real.base, "token": tok_a[key_a], "name": "Casa A"})
     assert wait_until(lambda: (probes_of(real, cookie_a).get(key_a) or {}).get("system"), timeout=60)
     mine = probes_of(real, cookie_a)[key_a]

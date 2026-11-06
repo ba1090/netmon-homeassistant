@@ -7,6 +7,8 @@ import stat
 import pytest
 import yaml
 
+from conftest import ADDON
+
 
 def opts(**kw):
     return {"server": "vm1.netmonhome.net", "token": "sonda_abc", "name": "Casa", **kw}
@@ -122,3 +124,19 @@ def test_options_file_never_rewritten(addon_module):
     addon_module.prepare_config(opts())
     addon_module.prepare_web_password(opts())
     assert os.stat(addon_module.OPTIONS).st_mtime_ns == before
+
+
+def test_same_rules_as_probe(addon_module, monkeypatch):
+    """addon.py tiene una copia delle regole della sonda (per non caricarne i moduli nel processo
+    che resta acceso): devono restare uguali a quelle di probe.py e config_web.py."""
+    monkeypatch.syspath_prepend(str(ADDON / "probe"))
+    import config_web
+    import probe
+    assert addon_module.LOCAL_SUFFIXES == probe.LOCAL_SUFFIXES == config_web.LOCAL_SUFFIXES
+    for host in ("192.168.1.2", "10.0.0.1", "fe80::1", "127.0.0.1", "nas.local", "x.fritz.box", "localhost",
+                 "8.8.8.8", "vm1.netmonhome.net", "fritz.box", "[::1]", ""):
+        assert addon_module.is_local_host(host) == probe.is_local_host(host), host
+    for url in ("https://vm1.netmonhome.net/api/report", "http://192.168.1.20:8000/api/report",
+                "http://vm1.netmonhome.net/api/report", "https://u:p@vm1.netmonhome.net/api/report",
+                "ftp://vm1.netmonhome.net/api/report", "http://nas.local/api/report"):
+        assert addon_module.server_url_ok(url) == probe.valid_server_url(url), url

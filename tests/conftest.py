@@ -89,6 +89,7 @@ class Addon:
         if idle_minutes is not None:
             self.env["ADDON_IDLE_MINUTES"] = str(idle_minutes)
         self.proc = None
+        self.log = None
 
     def start(self):
         self.log = open(self.log_path, "w")
@@ -104,7 +105,7 @@ class Addon:
             except subprocess.TimeoutExpired:
                 self.proc.kill()
                 self.proc.wait()
-        if getattr(self, "log", None):
+        if self.log:
             self.log.close()
 
     def logtext(self):
@@ -120,11 +121,20 @@ class Addon:
                 return line.split("=", 1)[1]
         return None
 
+    def _child(self, needle):
+        return next((c for c in children(self.proc.pid) if needle in cmdline(c)), None)
+
     def page_pid(self):
-        return next((c for c in children(self.proc.pid) if "config_web" in cmdline(c)), None)
+        return self._child("config_web")
 
     def probe_pid(self):
-        return next((c for c in children(self.proc.pid) if "probe.py" in cmdline(c)), None)
+        return self._child("probe.py")
+
+    def wait_page_ready(self):
+        """Password pronta e porta della pagina in ascolto; restituisce la password."""
+        pw = wait_until(self.password)
+        assert wait_until(lambda: "parte alla prima visita" in self.logtext()), self.logtext()
+        return pw
 
     def request(self, method="GET", path="/", password=None, body=None, headers=None, host=None, timeout=10):
         """Richiesta alla pagina locale; restituisce (stato, intestazioni, corpo)."""
@@ -149,6 +159,17 @@ class Addon:
 def server():
     with FakeServer() as srv:
         yield srv
+
+
+@pytest.fixture
+def token(server):
+    """Token della sonda «p_test» di un account del server finto."""
+    return server.state.add_account("a@example.test", "Password-A-123")["p_test"]
+
+
+def options(server, token, **kw):
+    """Opzioni dell'add-on come le scrive Home Assistant."""
+    return {"server": server.base, "token": token, "name": "Prova HA", **kw}
 
 
 @pytest.fixture

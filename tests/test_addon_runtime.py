@@ -3,19 +3,15 @@ quando la si apre e si chiude da sola, la password vale anche dopo una ripartenz
 dati restano leggibili solo dall'add-on e l'arresto ferma tutto."""
 import os
 import signal
+import socket
 import stat
 import time
 
-from conftest import wait_until
+from conftest import options, wait_until
 
 
-def options(server, token, **kw):
-    return {"server": server.base, "token": token, "name": "Prova HA", **kw}
-
-
-def test_probe_reports_and_says_managed(server, make_addon):
-    tok = server.state.add_account("a@example.test", "Password-A-123")["p_test"]
-    addon = make_addon(options(server, tok))
+def test_probe_reports_and_says_managed(server, token, make_addon):
+    addon = make_addon(options(server, token))
     rep = wait_until(lambda: server.state.last.get("p_test"), timeout=30)
     assert rep, addon.logtext()
     system = rep.get("system") or {}
@@ -37,10 +33,9 @@ def test_wrong_token_not_accepted(server, make_addon):
     assert addon.proc.poll() is None            # la sonda riprova, l'add-on resta acceso
 
 
-def test_page_starts_on_demand_and_stops_when_idle(server, make_addon):
-    tok = server.state.add_account("a@example.test", "Password-A-123")["p_test"]
-    addon = make_addon(options(server, tok), idle_minutes=0.05)     # 3 secondi
-    wait_until(lambda: "parte alla prima visita" in addon.logtext())
+def test_page_starts_on_demand_and_stops_when_idle(server, token, make_addon):
+    addon = make_addon(options(server, token), idle_minutes=0.05)     # 3 secondi
+    addon.wait_page_ready()
     assert addon.page_pid() is None              # nessuno l'ha aperta: non gira
     status, _, _ = addon.request("GET", "/", password=addon.password())
     assert status == 200
@@ -52,11 +47,9 @@ def test_page_starts_on_demand_and_stops_when_idle(server, make_addon):
     assert addon.request("GET", "/", password=addon.password())[0] == 200
 
 
-def test_password_changed_from_page_survives_page_restart(server, make_addon):
-    tok = server.state.add_account("a@example.test", "Password-A-123")["p_test"]
-    addon = make_addon(options(server, tok))
-    old = wait_until(addon.password)
-    wait_until(lambda: "parte alla prima visita" in addon.logtext())
+def test_password_changed_from_page_survives_page_restart(server, token, make_addon):
+    addon = make_addon(options(server, token))
+    old = addon.wait_page_ready()
     new = "Nuova-Password-Pagina-42"
     status, _, body = addon.request("POST", "/api/password", password=old,
                                     body={"password": new, "repeat": new})
@@ -78,11 +71,9 @@ def test_password_changed_from_page_survives_page_restart(server, make_addon):
     assert addon.request("GET", "/", password=old)[0] == 401
 
 
-def test_page_requires_password_host_and_origin(server, make_addon):
-    tok = server.state.add_account("a@example.test", "Password-A-123")["p_test"]
-    addon = make_addon(options(server, tok))
-    pw = wait_until(addon.password)
-    wait_until(lambda: "parte alla prima visita" in addon.logtext())
+def test_page_requires_password_host_and_origin(server, token, make_addon):
+    addon = make_addon(options(server, token))
+    pw = addon.wait_page_ready()
     assert addon.request("GET", "/")[0] == 401
     assert addon.request("GET", "/api/config", password="sbagliata-sbagliata")[0] == 401
     # DNS rebinding: un nome di Internet nel Host non apre la pagina nemmeno con la password
@@ -95,22 +86,19 @@ def test_page_requires_password_host_and_origin(server, make_addon):
     assert addon.password() == pw
 
 
-def test_secrets_masked_on_page(server, make_addon):
-    tok = server.state.add_account("a@example.test", "Password-A-123")["p_test"]
-    addon = make_addon(options(server, tok))
-    pw = wait_until(addon.password)
-    wait_until(lambda: "parte alla prima visita" in addon.logtext())
+def test_secrets_masked_on_page(server, token, make_addon):
+    addon = make_addon(options(server, token))
+    pw = addon.wait_page_ready()
     status, headers, body = addon.request("GET", "/api/config", password=pw)
     assert status == 200
-    assert tok.encode() not in body
+    assert token.encode() not in body
     assert headers.get("X-Frame-Options") == "DENY"
     assert "frame-ancestors 'none'" in headers.get("Content-Security-Policy", "")
 
 
-def test_data_files_private(server, make_addon):
+def test_data_files_private(server, token, make_addon):
     """Tutto quello che l'add-on e la sonda scrivono in /data è leggibile solo da loro."""
-    tok = server.state.add_account("a@example.test", "Password-A-123")["p_test"]
-    addon = make_addon(options(server, tok))
+    addon = make_addon(options(server, token))
     wait_until(lambda: server.state.last.get("p_test"), timeout=30)
     time.sleep(2)
     bad = []
@@ -125,9 +113,8 @@ def test_data_files_private(server, make_addon):
     assert not bad, bad
 
 
-def test_sigterm_stops_everything(server, make_addon):
-    tok = server.state.add_account("a@example.test", "Password-A-123")["p_test"]
-    addon = make_addon(options(server, tok))
+def test_sigterm_stops_everything(server, token, make_addon):
+    addon = make_addon(options(server, token))
     wait_until(lambda: server.state.last.get("p_test"), timeout=30)
     addon.request("GET", "/", password=addon.password())
     kids = [addon.probe_pid(), wait_until(addon.page_pid)]
@@ -139,14 +126,12 @@ def test_sigterm_stops_everything(server, make_addon):
                for k in kids)
 
 
-def test_busy_port_does_not_stop_probe(server, make_addon):
-    import socket
-    tok = server.state.add_account("a@example.test", "Password-A-123")["p_test"]
+def test_busy_port_does_not_stop_probe(server, token, make_addon):
     blocker = socket.socket()
     blocker.bind(("0.0.0.0", 0))
     blocker.listen()
     try:
-        addon = make_addon(options(server, tok, web_port=blocker.getsockname()[1]))
+        addon = make_addon(options(server, token, web_port=blocker.getsockname()[1]))
         assert wait_until(lambda: server.state.last.get("p_test"), timeout=30)
         assert wait_until(lambda: "non disponibile" in addon.logtext())
         assert addon.proc.poll() is None
@@ -154,9 +139,8 @@ def test_busy_port_does_not_stop_probe(server, make_addon):
         blocker.close()
 
 
-def test_crashing_probe_restarted(server, make_addon):
-    tok = server.state.add_account("a@example.test", "Password-A-123")["p_test"]
-    addon = make_addon(options(server, tok))
+def test_crashing_probe_restarted(server, token, make_addon):
+    addon = make_addon(options(server, token))
     first = wait_until(addon.probe_pid)
     os.kill(first, signal.SIGKILL)
     second = wait_until(lambda: (p := addon.probe_pid()) and p != first and p, timeout=20)

@@ -5,7 +5,6 @@ import http.cookies
 import json
 import os
 import secrets
-import socket
 import subprocess
 import sys
 import tempfile
@@ -15,6 +14,8 @@ import urllib.request
 from pathlib import Path
 
 import pytest
+
+from conftest import free_port
 
 PASSWORD = "Password-Prova-123!"
 
@@ -50,9 +51,7 @@ class RealServer:
     def __init__(self):
         self.repo, self.python = config()
         self.data = Path(tempfile.mkdtemp(prefix="netmon-ha-"))
-        with socket.socket() as s:
-            s.bind(("127.0.0.1", 0))
-            self.port = s.getsockname()[1]
+        self.port = free_port()
         self.base = f"http://127.0.0.1:{self.port}"
         self.api_token = "chiave-" + secrets.token_urlsafe(16)
         self.env = {**os.environ, "API_TOKEN": self.api_token, "DATA_DIR": str(self.data), "COOKIE_SECURE": "0",
@@ -92,7 +91,7 @@ class RealServer:
         import auth  # noqa: PLC0415 — solo libreria standard
         return auth.AuthDB(self.data / "auth.db")
 
-    def account(self, email, probes=1, plan="personalizzato"):
+    def account(self, email, probes=1):
         """Nuovo account con `probes` sonde; restituisce (cookie, {chiave sonda: token})."""
         db = self.authdb()
         code = self.api_token if self.first else db.create_invite("prova", email=email)
@@ -103,7 +102,7 @@ class RealServer:
         cookie = http.cookies.SimpleCookie(headers.get("Set-Cookie"))["netmon_session"].value
         with db._conn() as c:
             uid = c.execute("SELECT id FROM users WHERE email = ?", (email,)).fetchone()[0]
-        db.set_limits(uid, 10, 5, 100, plan)
+        db.set_limits(uid, 10, 5, 100, "personalizzato")
         tokens = {}
         for i in range(probes):
             status, data, _ = call(self.base, "POST", "/api/probes/new", {"name": f"sonda {i}"}, cookie=cookie)

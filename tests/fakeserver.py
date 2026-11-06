@@ -23,7 +23,6 @@ class State:
         self.sessions = {}          # cookie -> email
         self.reports = []           # (chiave sonda, corpo del report)
         self.last = {}              # chiave sonda -> ultimo report
-        self.login_reply = None     # (status, corpo) per simulare risposte particolari del login
         self.status_override = None  # corpo di /api/status al posto di quello vero (dati malformati)
         self.requests = 0
         self.conns = set()          # connessioni aperte: chiuse anche loro quando il server «cade»
@@ -131,9 +130,6 @@ def make_handler(state):
                     del state.reports[:-2000]
                 return self._send(200, {"ok": True, "alerts": 0, "config_rev": 0, "has_config": False})
             if path == "/api/auth/login":
-                if state.login_reply is not None:
-                    status, reply = state.login_reply
-                    return self._send(status, reply)
                 acc = state.accounts.get(str((body or {}).get("email") or "").lower())
                 if not acc or acc["password"] != (body or {}).get("password"):
                     return self._send(401, {"detail": "Email o password errate."})
@@ -147,9 +143,11 @@ def make_handler(state):
 
 
 class FakeServer:
-    def __init__(self):
-        self.state = State()
-        self.httpd = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(self.state))
+    """port e state permettono di far «tornare» lo stesso server dopo una caduta."""
+
+    def __init__(self, port=0, state=None):
+        self.state = state or State()
+        self.httpd = ThreadingHTTPServer(("127.0.0.1", port), make_handler(self.state))
         self.httpd.daemon_threads = True
         self.port = self.httpd.server_address[1]
         self.base = f"http://127.0.0.1:{self.port}"

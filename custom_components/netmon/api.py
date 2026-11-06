@@ -71,7 +71,11 @@ class NetMonClient:
             "POST", "/api/auth/login",
             json={"email": self._email, "password": self._password, "remember": True})
         if status == 410 and isinstance(data, dict) and data.get("moved"):
-            raise NetMonMoved(str(data["moved"]))
+            moved = str(data["moved"]).strip()
+            # da https non si passa a http: email e password viaggerebbero in chiaro
+            if self.url.startswith("https://") and moved.lower().startswith("http://"):
+                raise NetMonError(f"il server indica un indirizzo non cifrato ({moved}): non lo uso")
+            raise NetMonMoved(moved)
         if status in (401, 403):
             self._refused = NetMonAuthError(detail_of(data) or "accesso non riuscito")
             raise self._refused

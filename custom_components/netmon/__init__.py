@@ -11,6 +11,7 @@ from homeassistant.helpers.device_registry import DeviceEntry
 
 from .api import NetMonClient
 from .const import DOMAIN
+from .entity import device_id
 from .coordinator import NetMonCoordinator
 
 PLATFORMS = [Platform.BINARY_SENSOR, Platform.SENSOR]
@@ -44,10 +45,9 @@ async def async_remove_config_entry_device(hass: HomeAssistant, entry: NetMonCon
                                            device: DeviceEntry) -> bool:
     """Pulsante «Elimina» di un dispositivo: permesso solo per sonde e dispositivi che il server non
     riporta più (tolti da NetMon); quelli ancora presenti ricomparirebbero al primo aggiornamento."""
-    base = entry.unique_id or entry.entry_id
     data = entry.runtime_data.data or {}
     present = set()
     for key, p in data.get("probes", {}).items():
-        present.add(f"{base}|{key}")
-        present.update(f"{base}|{key}|{name}" for name in p.get("by_name", {}))
+        present.add(device_id(entry, key))
+        present.update(device_id(entry, key, name) for name in p.get("by_name", {}))
     return not any(domain == DOMAIN and ident in present for domain, ident in device.identifiers)

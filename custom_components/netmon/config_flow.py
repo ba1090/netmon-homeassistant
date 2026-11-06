@@ -40,11 +40,7 @@ async def validate(hass: HomeAssistant, data: dict[str, Any]) -> tuple[str, dict
                 return url, await client.status()
             except NetMonMoved as moved:
                 _LOGGER.info("Account su un altro server NetMon: %s", moved.url)
-                new = normalize_url(moved.url)
-                # da https non si passa a http: email e password viaggerebbero in chiaro
-                if url.startswith("https://") and not new.startswith("https://"):
-                    raise NetMonError(f"il server indica un indirizzo non cifrato ({new}): non lo uso") from None
-                url = new
+                url = normalize_url(moved.url)
         raise NetMonError("troppi spostamenti")
     finally:
         session.detach()

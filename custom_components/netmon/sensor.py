@@ -70,13 +70,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: NetMonConfigEntry,
                             async_add_entities: AddEntitiesCallback) -> None:
     coordinator = entry.runtime_data
 
-    def build(data: dict[str, Any]):
+    def build(data: dict[str, Any], is_new):
         for key, p in data.get("probes", {}).items():
             for desc in PROBE_SENSORS:
-                if (p.get(desc.section) or {}).get(desc.field) is not None:
+                if (p.get(desc.section) or {}).get(desc.field) is not None and is_new((key, desc.key)):
                     yield ProbeSensor(coordinator, key, desc)
             for name in p["by_name"]:
-                yield DeviceRtt(coordinator, key, "rtt", name)
+                if is_new((key, name, "rtt")):
+                    yield DeviceRtt(coordinator, key, "rtt", name)
 
     entry.async_on_unload(add_dynamic(coordinator, async_add_entities, build))
 

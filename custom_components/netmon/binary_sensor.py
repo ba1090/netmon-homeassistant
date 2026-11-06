@@ -15,13 +15,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: NetMonConfigEntry,
                             async_add_entities: AddEntitiesCallback) -> None:
     coordinator = entry.runtime_data
 
-    def build(data: dict[str, Any]):
+    def build(data: dict[str, Any], is_new):
         for key, p in data.get("probes", {}).items():
-            yield ProbeOnline(coordinator, key, "online")
-            if "connected" in (p.get("fritz") or {}):
+            if is_new((key, "online")):
+                yield ProbeOnline(coordinator, key, "online")
+            if "connected" in (p.get("fritz") or {}) and is_new((key, "fritz_internet")):
                 yield FritzInternet(coordinator, key, "fritz_internet")
             for name in p["by_name"]:
-                yield DeviceOnline(coordinator, key, "online", name)
+                if is_new((key, name, "online")):
+                    yield DeviceOnline(coordinator, key, "online", name)
 
     entry.async_on_unload(add_dynamic(coordinator, async_add_entities, build))
 
@@ -33,7 +35,7 @@ class ProbeOnline(NetMonEntity, BinarySensorEntity):
 
     @property
     def is_on(self) -> bool | None:
-        return self.probe["state"] != "bad" if self.probe else None
+        return self.probe.get("state") != "bad" if self.probe else None
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:

@@ -7,8 +7,10 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_EMAIL, CONF_PASSWORD, CONF_URL, CONF_VERIFY_SSL, Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_create_clientsession
+from homeassistant.helpers.device_registry import DeviceEntry
 
 from .api import NetMonClient
+from .const import DOMAIN
 from .coordinator import NetMonCoordinator
 
 PLATFORMS = [Platform.BINARY_SENSOR, Platform.SENSOR]
@@ -36,3 +38,16 @@ async def async_unload_entry(hass: HomeAssistant, entry: NetMonConfigEntry) -> b
 
 async def _reload(hass: HomeAssistant, entry: NetMonConfigEntry) -> None:
     await hass.config_entries.async_reload(entry.entry_id)
+
+
+async def async_remove_config_entry_device(hass: HomeAssistant, entry: NetMonConfigEntry,
+                                           device: DeviceEntry) -> bool:
+    """Pulsante «Elimina» di un dispositivo: permesso solo per sonde e dispositivi che il server non
+    riporta più (tolti da NetMon); quelli ancora presenti ricomparirebbero al primo aggiornamento."""
+    base = entry.unique_id or entry.entry_id
+    data = entry.runtime_data.data or {}
+    present = set()
+    for key, p in data.get("probes", {}).items():
+        present.add(f"{base}|{key}")
+        present.update(f"{base}|{key}|{name}" for name in p.get("by_name", {}))
+    return not any(domain == DOMAIN and ident in present for domain, ident in device.identifiers)

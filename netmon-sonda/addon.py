@@ -2,9 +2,11 @@
 
 Fa la parte di installa-sonda.sh e delle unità systemd: dalle opzioni dell'add-on scrive
 config.yaml (indirizzo del server, token, nome), prepara la password della pagina locale e poi
-tiene in vita i due programmi della sonda, probe.py e la pagina locale (config_web.py), con gli
-stessi riavvii di systemd (Restart=always, RestartSec=10). Tutto quello che deve restare tra un
-riavvio e l'altro sta in /data, la cartella persistente dell'add-on.
+tiene in vita la sonda (probe.py) con gli stessi riavvii di systemd (Restart=always, RestartSec=10).
+La pagina locale (config_web.py) parte solo quando qualcuno la apre, come con netmon-config.socket
+sul Raspberry: qui si tiene la porta in ascolto e alla prima connessione si avvia la pagina, che si
+chiude da sola dopo IDLE_MINUTES senza richieste e da ferma non occupa memoria. Tutto quello che deve
+restare tra un riavvio e l'altro sta in /data, la cartella persistente dell'add-on.
 
 Senza sudo e systemd la sonda misura e invia come sul Raspberry: mancano solo riavvio,
 aggiornamenti e reti Wi-Fi da remoto, che qui fa Home Assistant (la sonda lo segnala da sola al
@@ -13,12 +15,15 @@ server). Gli aggiornamenti di netmon arrivano come aggiornamenti dell'add-on.
 import ipaddress
 import json
 import os
+import re
 import secrets
+import select
 import signal
 import socket
 import subprocess
 import sys
 import time
+from urllib.parse import urlsplit
 
 import yaml
 
@@ -30,8 +35,13 @@ WEB_ENV = os.path.join(DATA, "web.env")
 APPLIED = os.path.join(DATA, "options-applied.json")
 WEB_PORT = 8080
 RESTART_SEC = 10
-PROBE_PID = "/run/netmon-probe.pid"      # per il systemctl minimo del container (stato nella pagina locale)
+# pagina locale ferma dopo 10 minuti senza richieste, come sul Raspberry (ADDON_IDLE_MINUTES: per le prove)
+IDLE_MINUTES = float(os.getenv("ADDON_IDLE_MINUTES", "10"))
+# per il systemctl minimo del container (stato nella pagina locale); ADDON_PID: per le prove
+PROBE_PID = os.getenv("ADDON_PID", "/run/netmon-probe.pid")
 DEFAULT_NAME = "Home Assistant"
+# Nomi della rete di casa, come LOCAL_SUFFIXES della sonda (probe.py, config_web.py)
+LOCAL_SUFFIXES = (".local", ".lan", ".home", ".home.arpa", ".internal", ".localdomain", ".fritz.box")
 
 
 def log(msg):
@@ -45,6 +55,27 @@ def report_url(server):
     scheme = "http" if s.lower().startswith("http://") else "https"
     host = s.split("://", 1)[-1].split("/", 1)[0].strip()
     return f"{scheme}://{host}/api/report" if host else ""
+
+
+def is_local_host(host):
+    """Indirizzo della rete di casa (IP privato, localhost o nome locale): stessa regola della sonda."""
+    host = (host or "").strip("[]").lower()
+    try:
+        ip = ipaddress.ip_address(host)
+        return ip.is_private or ip.is_loopback or ip.is_link_local
+    except ValueError:
+        return host == "localhost" or host.endswith(LOCAL_SUFFIXES)
+
+
+def server_url_ok(url):
+    """https:// sempre; http:// solo verso la rete di casa, altrimenti il token viaggerebbe in chiaro
+    su Internet (la stessa regola di valid_server_url nella sonda)."""
+    try:
+        u = urlsplit(url)
+        host = u.hostname
+    except ValueError:
+        return False
+    return bool(host) and not u.username and (u.scheme == "https" or (u.scheme == "http" and is_local_host(host)))
 
 
 def default_gateway():
@@ -83,11 +114,12 @@ def prepare_config(opts):
         log("Manca l'indirizzo del server o il token della sonda: scrivili nella scheda "
             "Configurazione dell'add-on (il token si crea nella pagina di stato, Impostazioni → Sonde).")
         return False
-    try:
-        with open(CONFIG, encoding="utf-8") as f:
-            cfg = yaml.safe_load(f) or {}
-    except FileNotFoundError:
-        cfg = {}
+    if not server_url_ok(wanted["server_url"]):
+        log(f"Indirizzo del server non accettato ({wanted['server_url']}): con http:// il token viaggerebbe "
+            "in chiaro su Internet. Scrivi solo il dominio (si usa https://); http:// va bene solo per un "
+            "server nella rete di casa.")
+        return False
+    cfg = read_config()
     try:
         with open(APPLIED, encoding="utf-8") as f:
             applied = json.load(f)
@@ -112,6 +144,31 @@ def prepare_config(opts):
     return True
 
 
+def read_config():
+    """config.yaml di /data. Se è danneggiato (spegnimento durante una scrittura, backup rovinato) lo
+    mette da parte e si riparte da capo, invece di fermare l'add-on a ogni avvio: dispositivi e
+    impostazioni li rimanda il server alla prima risposta (configurazione con revisione più alta)."""
+    try:
+        with open(CONFIG, encoding="utf-8") as f:
+            cfg = yaml.safe_load(f)
+    except FileNotFoundError:
+        return {}
+    except (OSError, ValueError, yaml.YAMLError) as exc:
+        cfg, err = None, exc
+    else:
+        err = None if isinstance(cfg, dict) or cfg is None else "non è un elenco di impostazioni"
+    if err is None:
+        return cfg or {}
+    aside = f"{CONFIG}.danneggiato-{time.strftime('%Y%m%d-%H%M%S')}"
+    try:
+        os.replace(CONFIG, aside)
+    except OSError:
+        aside = "(non spostato)"
+    log(f"config.yaml danneggiato ({err}): messo da parte in {aside}, riparto dalle opzioni dell'add-on. "
+        "Dispositivi e impostazioni tornano dal server alla prima risposta.")
+    return {}
+
+
 def read_web_env():
     env = {}
     try:
@@ -131,7 +188,9 @@ def prepare_web_password(opts):
     env = read_web_env()
     chosen = str(opts.get("web_password") or "")
     if chosen:
-        if len(chosen) < 12 or any(c in chosen for c in " \t\"'\\$`"):
+        # come WEB_PW_BAD della pagina locale (più l'apice inverso): niente spazi né a capo, che
+        # aggiungerebbero righe a web.env
+        if len(chosen) < 12 or re.search(r"[\s\"'\\$`]", chosen):
             log("La password della pagina locale nelle opzioni non va bene (almeno 12 caratteri, senza "
                 "spazi, virgolette, \\ e $): tengo quella di prima.")
         else:
@@ -155,7 +214,34 @@ def web_port(opts):
     return port if 1024 <= port <= 65535 else WEB_PORT
 
 
+def listen(port):
+    """Porta della pagina locale tenuta aperta da qui, come netmon-config.socket sul Raspberry."""
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    try:
+        sock.bind(("0.0.0.0", port))
+        sock.listen(64)
+    except OSError:
+        sock.close()
+        raise
+    return sock
+
+
+def start_page(sock, env):
+    """Avvia la pagina locale con la porta già aperta, come la passa systemd: descrittore 3,
+    LISTEN_FDS=1 e LISTEN_PID uguale al pid della pagina (config_web.systemd_socket). La password si
+    rilegge da web.env a ogni avvio: quella cambiata dalla pagina vale anche dopo che si è chiusa."""
+    fd = sock.fileno()
+    code = ("import os, sys; os.environ['LISTEN_PID'] = str(os.getpid()); os.environ['LISTEN_FDS'] = '1'; "
+            f"sys.path.insert(0, {APP!r}); import config_web; config_web.main()")
+    return subprocess.Popen([sys.executable, "-c", code], env={**env, **read_web_env()}, cwd=APP,
+                            pass_fds=(fd,), preexec_fn=None if fd == 3 else (lambda: os.dup2(fd, 3)))
+
+
 def main():
+    # tutto quello che add-on, sonda e pagina scrivono in /data è leggibile solo dall'add-on
+    # (come UMask=0077 delle unità systemd)
+    os.umask(0o077)
     try:
         with open(OPTIONS, encoding="utf-8") as f:
             opts = json.load(f)
@@ -169,27 +255,26 @@ def main():
         signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
         while True:
             time.sleep(3600)
-    web = prepare_web_password(opts)
+    prepare_web_password(opts)
     port = web_port(opts)
 
-    env = {**os.environ, **web,
+    # la password della pagina non va alla sonda: la pagina la legge da web.env (start_page)
+    env = {**os.environ,
            "PROBE_CONFIG": CONFIG,
            "PROBE_BUFFER": os.path.join(DATA, "buffer.jsonl"),
            "PROBE_STATE_DIR": os.path.join(DATA, "state"),
            "PROBE_SYS_DIR": os.path.join(DATA, "sys"),
            "WEB_ENV": WEB_ENV,
            "WEB_PORT": str(port),
+           "IDLE_MINUTES": str(IDLE_MINUTES),
            "MALLOC_ARENA_MAX": "2",
            # la sonda è gestita da Home Assistant: aggiornamenti, riavvio, reti Wi-Fi e disinstallazione
            # li fa Home Assistant, e la sonda lo dice al server e nella pagina locale
            "NETMON_MANAGED_BY": "Home Assistant",
            "PYTHONUNBUFFERED": "1"}
-    py = sys.executable
-    programs = {
-        "sonda": [py, os.path.join(APP, "probe.py")],
-        "pagina locale": [py, "-c", f"import sys; sys.path.insert(0, {APP!r}); import config_web; config_web.main()"],
-    }
-    running, restart_at = {}, {name: 0.0 for name in programs}
+    probe_cmd = [sys.executable, os.path.join(APP, "probe.py")]
+    probe = page = sock = None
+    probe_at = page_at = listen_at = 0.0
     stopping = []
 
     def stop(*_):
@@ -197,28 +282,46 @@ def main():
 
     signal.signal(signal.SIGTERM, stop)
     signal.signal(signal.SIGINT, stop)
-    log(f"Pagina locale su http://{socket.gethostname()}:{port} (o l'IP di Home Assistant)")
     while not stopping:
         now = time.monotonic()
-        for name, cmd in programs.items():
-            proc = running.get(name)
-            if proc is not None and proc.poll() is not None:
-                log(f"{name}: terminata (codice {proc.returncode}), riparte tra {RESTART_SEC} s")
-                running.pop(name)
-                restart_at[name] = now + RESTART_SEC
-            if name not in running and now >= restart_at[name]:
-                running[name] = subprocess.Popen(cmd, env=env, cwd=APP)
-                if name == "sonda":
-                    with open(PROBE_PID, "w", encoding="ascii") as f:
-                        f.write(str(running[name].pid))
-        time.sleep(1)
-    for proc in running.values():
-        proc.terminate()
-    for proc in running.values():
+        if probe is not None and probe.poll() is not None:
+            log(f"sonda: terminata (codice {probe.returncode}), riparte tra {RESTART_SEC} s")
+            probe, probe_at = None, now + RESTART_SEC
+        if probe is None and now >= probe_at:
+            probe = subprocess.Popen(probe_cmd, env=env, cwd=APP)
+            with open(PROBE_PID, "w", encoding="ascii") as f:
+                f.write(str(probe.pid))
+        if page is not None and page.poll() is not None:
+            if page.returncode:            # chiusa da sola dopo IDLE_MINUTES: codice 0, nessun messaggio
+                log(f"pagina locale: terminata (codice {page.returncode}), riparte tra {RESTART_SEC} s")
+                page_at = now + RESTART_SEC
+            page = None
+        if sock is None and now >= listen_at:
+            try:
+                sock = listen(port)
+                log(f"Pagina locale su http://{socket.gethostname()}:{port} (o l'IP di Home Assistant): "
+                    "parte alla prima visita")
+            except OSError as exc:
+                log(f"Porta {port} della pagina locale non disponibile ({exc}): riprovo tra un minuto. "
+                    "Se un'altra app la usa, scegli un'altra porta nelle opzioni (web_port).")
+                listen_at = now + 60
+        # attesa: un secondo, o meno se qualcuno apre la pagina mentre è ferma
+        ready = [sock] if sock is not None and page is None and now >= page_at else []
         try:
-            proc.wait(timeout=10)
-        except subprocess.TimeoutExpired:
-            proc.kill()
+            readable = select.select(ready, [], [], 1.0)[0]
+        except InterruptedError:
+            readable = []
+        if readable and not stopping:
+            page = start_page(sock, env)
+    for proc in (probe, page):
+        if proc is not None:
+            proc.terminate()
+    for proc in (probe, page):
+        if proc is not None:
+            try:
+                proc.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                proc.kill()
 
 
 if __name__ == "__main__":

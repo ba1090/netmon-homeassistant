@@ -53,15 +53,22 @@ class NetMonEntity(CoordinatorEntity[NetMonCoordinator]):
 
 
 def add_dynamic(coordinator: NetMonCoordinator, async_add_entities: AddEntitiesCallback,
-                build: Callable[[dict[str, Any]], Iterable[Entity]]) -> Callable[[], None]:
+                build: Callable[[dict[str, Any], Callable[[tuple], bool]], Iterable[Entity]]) -> Callable[[], None]:
     """Aggiunge le entità che `build` crea dallo stato, anche quelle che compaiono dopo (sonde o
-    dispositivi nuovi). Restituisce la funzione per smettere di ascoltare."""
-    known: set[str] = set()
+    dispositivi nuovi). `build` riceve anche `is_new(chiave)`: crea un'entità solo per le chiavi mai
+    viste, così a ogni aggiornamento non si costruiscono di nuovo tutte. Restituisce la funzione per
+    smettere di ascoltare."""
+    known: set[tuple] = set()
+
+    def is_new(key: tuple) -> bool:
+        if key in known:
+            return False
+        known.add(key)
+        return True
 
     @callback
     def update() -> None:
-        new = [e for e in build(coordinator.data or {}) if e.unique_id not in known]
-        known.update(e.unique_id for e in new)
+        new = list(build(coordinator.data or {}, is_new))
         if new:
             async_add_entities(new)
 

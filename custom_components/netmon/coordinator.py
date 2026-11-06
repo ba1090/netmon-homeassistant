@@ -37,6 +37,9 @@ class NetMonCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             raise UpdateFailed(str(exc)) from exc
         probes = {}
         for p in raw.get("probes") or []:
-            p["by_name"] = {d["name"]: d for d in p.get("devices") or [] if d.get("name")}
+            if not isinstance(p, dict) or not p.get("name"):      # un elemento malformato non ferma gli altri
+                continue
+            p["by_name"] = {d["name"]: d for d in p.get("devices") or [] if isinstance(d, dict) and d.get("name")}
             probes[p["name"]] = p
-        return {"probes": probes, "server": raw.get("server") or {}}
+        server = raw.get("server")
+        return {"probes": probes, "server": server if isinstance(server, dict) else {}}

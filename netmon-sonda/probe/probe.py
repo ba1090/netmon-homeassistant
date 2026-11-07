@@ -8,7 +8,7 @@ con cache, buffer letto e scritto a pezzi.
 Dipendenze (Debian, Raspberry Pi OS e simili): sudo apt install python3-yaml
 (fritzconnection, facoltativa, solo per il FRITZ!Box)
 """
-__version__ = "1.1.20261106-221019"
+__version__ = "1.1.20261107-125013"
 import http.client
 import fcntl
 import ipaddress

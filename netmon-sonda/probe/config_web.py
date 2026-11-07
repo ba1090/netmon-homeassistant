@@ -16,7 +16,7 @@
 
 Dipendenze: python3-yaml (già installato per la sonda).
 """
-__version__ = "1.1.20261106-221019"
+__version__ = "1.1.20261107-125013"
 import base64
 import hmac
 import ipaddress
@@ -250,11 +250,14 @@ def save_web_password(new):
     except FileNotFoundError:
         pass
     righe.append("WEB_PASSWORD=" + new)
-    with open(WEB_ENV, "w", encoding="utf-8") as f:
+    # Se il file non c'è nasce già 600: con open(..., "w") restava leggibile da tutti (umask del
+    # servizio) per l'istante prima del chmod.
+    fd = os.open(WEB_ENV, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        os.fchmod(f.fileno(), 0o600)
         f.write("\n".join(righe) + "\n")
         f.flush()
         os.fsync(f.fileno())
-    os.chmod(WEB_ENV, 0o600)
     PASSWORD = new
     with _auth_lock:
         _auth_fails.clear()      # i tentativi sbagliati di prima non bloccano chi ha appena cambiato

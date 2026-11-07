@@ -16,7 +16,7 @@
 
 Dipendenze: python3-yaml (già installato per la sonda).
 """
-__version__ = "1.1.20261029-154936"
+__version__ = "1.1.20261106-221019"
 import base64
 import hmac
 import ipaddress
@@ -50,13 +50,23 @@ EXTRA_HOSTS = {h.strip().lower() for h in os.getenv("WEB_ALLOWED_HOSTS", "").spl
 LOCAL_SUFFIXES = (".local", ".lan", ".home", ".home.arpa", ".internal", ".localdomain", ".fritz.box")
 SECRET_FIELDS = ("token", "fritz_password")
 MASK = "••••••••"                 # al posto dei segreti nella pagina (finché non si preme "Mostra")
+CSP_TEMPLATE = ("default-src 'self'; script-src 'self'{scripts}; "
+                "style-src 'self' 'unsafe-inline'; "
+                "font-src 'self'; img-src 'self' data:; connect-src 'self'; "
+                "frame-ancestors 'none'; base-uri 'none'; form-action 'self'; object-src 'none'")
+# Nessuno script scritto nella pagina parte, tranne quelli della pagina stessa: la pagina dichiara
+# l'impronta SHA-256 di ognuno (page_csp), come la dashboard sul server.
 SECURITY_HEADERS = {
     "X-Content-Type-Options": "nosniff", "X-Frame-Options": "DENY", "Referrer-Policy": "no-referrer",
-    "Content-Security-Policy": ("default-src 'self'; script-src 'self' 'unsafe-inline'; "
-                                "style-src 'self' 'unsafe-inline'; "
-                                "font-src 'self'; img-src 'self' data:; connect-src 'self'; "
-                                "frame-ancestors 'none'; base-uri 'none'; form-action 'self'"),
+    "Content-Security-Policy": CSP_TEMPLATE.format(scripts=""),
 }
+_SCRIPT_RE = re.compile(r"<script(?:\s[^>]*)?>(.*?)</script>", re.S | re.I)
+
+
+def page_csp(html):
+    import hashlib
+    hashes = sorted({base64.b64encode(hashlib.sha256(m.encode()).digest()).decode() for m in _SCRIPT_RE.findall(html)})
+    return CSP_TEMPLATE.format(scripts="".join(f" 'sha256-{h}'" for h in hashes))
 # Logo di netmon (copia di server/brand.py, generato da tools/genera-icone.py)
 LOGO_SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="14" fill="#174A72"/><path d="M32.00 12.00L49.32 22.00L49.32 42.00L32.00 52.00L14.68 42.00L14.68 22.00Z" fill="none" stroke="#FFFFFF" stroke-opacity=".45" stroke-width="1.8" stroke-linejoin="round"/><path d="M32 32L32.00 12.00M32 32L49.32 22.00M32 32L49.32 42.00M32 32L32.00 52.00M32 32L14.68 42.00M32 32L14.68 22.00" stroke="#FFFFFF" stroke-width="1.8" stroke-linecap="round"/><circle cx="32.00" cy="12.00" r="4" fill="#FFFFFF"/><circle cx="49.32" cy="22.00" r="4" fill="#FFFFFF"/><circle cx="49.32" cy="42.00" r="4" fill="#FFFFFF"/><circle cx="32.00" cy="52.00" r="4" fill="#FFFFFF"/><circle cx="14.68" cy="42.00" r="4" fill="#FFFFFF"/><circle cx="14.68" cy="22.00" r="4" fill="#FFFFFF"/><circle cx="32" cy="32" r="9.00" fill="#174A72"/><path d="M32.00 24.50L24.00 31.50L26.60 31.50L26.60 39.00L37.40 39.00L37.40 31.50L40.00 31.50Z" fill="#7FB8E0" stroke="#7FB8E0" stroke-width="1.50" stroke-linejoin="round"/></svg>'
 FAVICON_SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="12.5" fill="#174A72"/><path d="M32.00 9.00L51.92 20.50L51.92 43.50L32.00 55.00L12.08 43.50L12.08 20.50Z" fill="none" stroke="#FFFFFF" stroke-opacity=".45" stroke-width="3" stroke-linejoin="round"/><path d="M32 32L32.00 9.00M32 32L51.92 20.50M32 32L51.92 43.50M32 32L32.00 55.00M32 32L12.08 43.50M32 32L12.08 20.50" stroke="#FFFFFF" stroke-width="3" stroke-linecap="round"/><circle cx="32.00" cy="9.00" r="5.5" fill="#FFFFFF"/><circle cx="51.92" cy="20.50" r="5.5" fill="#FFFFFF"/><circle cx="51.92" cy="43.50" r="5.5" fill="#FFFFFF"/><circle cx="32.00" cy="55.00" r="5.5" fill="#FFFFFF"/><circle cx="12.08" cy="43.50" r="5.5" fill="#FFFFFF"/><circle cx="12.08" cy="20.50" r="5.5" fill="#FFFFFF"/><circle cx="32" cy="32" r="12.15" fill="#174A72"/><path d="M32.00 21.88L21.20 31.32L24.71 31.32L24.71 41.45L39.29 41.45L39.29 31.32L42.80 31.32Z" fill="#7FB8E0" stroke="#7FB8E0" stroke-width="2.03" stroke-linejoin="round"/></svg>'
@@ -673,11 +683,12 @@ class Handler(BaseHTTPRequestHandler):
         if not self.allowed():
             return
         if self.path in ("/", "/index.html"):
-            body = PAGES[page_lang()].encode()
+            lang = page_lang()
+            body = PAGES[lang].encode()
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.send_header("Content-Length", str(len(body)))
-            for k, v in SECURITY_HEADERS.items():
+            for k, v in {**SECURITY_HEADERS, "Content-Security-Policy": PAGE_CSP[lang]}.items():
                 self.send_header(k, v)
             self.end_headers()
             self.wfile.write(body)
@@ -961,10 +972,13 @@ body.nav-open .sidenav{transform:none;visibility:visible}
 .navveil{position:fixed;inset:0;z-index:35;background:rgba(0,0,0,.35);border:0;border-radius:0;padding:0;display:none}
 body.nav-open .navveil{display:block}
 @media (min-width:900px){
-  body.nav-open main{margin-left:220px}
+  /* il menu occupa i primi 220px: il contenuto resta centrato nello spazio che rimane,
+     come nelle pagine utente e amministrazione del server */
+  body.nav-open{padding-left:220px}
   body.nav-open .bar{left:220px}
   body.nav-open .navveil{display:none}
-  main{transition:margin-left .18s ease}
+  body{transition:padding-left .18s ease}
+  .bar{transition:left .18s ease}
 }
 .navtoggle{flex:none;line-height:1;padding:6px 10px;font-size:1.1rem}
 .pagetabs{display:flex;flex-direction:column;gap:2px;align-items:stretch}
@@ -4227,6 +4241,7 @@ PAGE_READY = (PAGE.replace("__NETMON_VERSION__", __version__)
               .replace("__NETMON_LOGO__", LOGO_SVG.replace("<svg ", '<svg aria-hidden="true" focusable="false" ', 1)))
 PAGES = {lang: PAGE_READY.replace('<html lang="it">', f'<html lang="{lang}">', 1)
          .replace("</title>", "</title>\n" + page_script(lang), 1) for lang in LANGS}
+PAGE_CSP = {lang: page_csp(html) for lang, html in PAGES.items()}
 
 
 def systemd_socket():

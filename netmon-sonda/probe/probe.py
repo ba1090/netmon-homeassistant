@@ -8,7 +8,7 @@ con cache, buffer letto e scritto a pezzi.
 Dipendenze (Debian, Raspberry Pi OS e simili): sudo apt install python3-yaml
 (fritzconnection, facoltativa, solo per il FRITZ!Box)
 """
-__version__ = "1.1.20261029-154936"
+__version__ = "1.1.20261106-221019"
 import http.client
 import fcntl
 import ipaddress
@@ -1429,16 +1429,53 @@ def _default_iface():
     return None
 
 
+_target_ip = {}             # nome del server -> (scadenza, indirizzo IPv4)
+
+
 def _local_ip(target):
+    """IP della sonda verso il server. Il nome del server si risolve al più ogni 5 minuti (prima era
+    una richiesta DNS a ogni ciclo); l'IP locale si legge ogni volta, così un cambio di rete si vede."""
+    now = time.monotonic()
+    hit = _target_ip.get(target)
+    if hit is None or hit[0] <= now:
+        try:
+            addr = socket.getaddrinfo(target, 80, socket.AF_INET, socket.SOCK_DGRAM)[0][4][0]
+        except (OSError, IndexError):
+            addr = None
+        hit = _target_ip[target] = (now + (300 if addr else 60), addr)
+    if not hit[1]:
+        return None
     try:
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sk:
-            sk.connect((target, 80))          # UDP: nessun pacchetto inviato, serve solo a scegliere l'IP
+            sk.connect((hit[1], 80))          # UDP: nessun pacchetto inviato, serve solo a scegliere l'IP
             return sk.getsockname()[0]
     except OSError:
         return None
 
 
+WIFI_LINK_EVERY = 120     # secondi tra due `iw dev … link` (rete, frequenza, velocità): il segnale è a ogni ciclo
+
+
 def _wifi_info(iface):
+    """Rete Wi-Fi e segnale. `iw` è un processo: si avvia al più ogni WIFI_LINK_EVERY secondi; il
+    segnale, quando il kernel lo dà in /proc/net/wireless (lo stesso valore di iw), si legge ogni volta."""
+    now = time.monotonic()
+    cached = _wifi_link.get(iface)
+    if cached is None or now - cached[0] >= WIFI_LINK_EVERY:
+        cached = _wifi_link[iface] = (now, _wifi_link_read(iface))
+    info = dict(cached[1])
+    for line in (_read("/proc/net/wireless", "") or "").splitlines()[2:]:
+        if line.strip().startswith(iface + ":"):
+            sig = _safe(lambda: int(float(line.split()[3])))
+            if sig is not None and sig < 0:
+                info["signal_dbm"] = sig
+    return info
+
+
+_wifi_link = {}
+
+
+def _wifi_link_read(iface):
     iw = static_info()["iw"]
     out = _run([iw, "dev", iface, "link"]) if iw else ""
     info = {}
@@ -1452,10 +1489,6 @@ def _wifi_info(iface):
             info["signal_dbm"] = _safe(lambda: int(line.split()[1]))
         elif line.startswith("tx bitrate:"):
             info["bitrate_mbit"] = _safe(lambda: float(line.split()[2]))
-    if "signal_dbm" not in info:                # alternativa senza il comando iw
-        for line in (_read("/proc/net/wireless", "") or "").splitlines()[2:]:
-            if line.strip().startswith(iface + ":"):
-                info["signal_dbm"] = _safe(lambda: int(float(line.split()[3])))
     return info
 
 
@@ -1523,6 +1556,22 @@ def static_info():
     return _static
 
 
+THROTTLED_SYSFS = "/sys/devices/platform/soc/soc:firmware/get_throttled"
+
+
+def _throttled():
+    """Bit di alimentazione e temperatura del Raspberry Pi: dal file del firmware (nessun processo),
+    altrimenti con `vcgencmd get_throttled`. None fuori dal Raspberry Pi."""
+    raw = _read(THROTTLED_SYSFS)
+    if raw:
+        value = _safe(lambda: int(raw, 16))
+        if value is not None:
+            return value
+    st = static_info()
+    thr = _run([st["vcgencmd"], "get_throttled"]) if st["vcgencmd"] else ""
+    return _safe(lambda: int(thr.split("=")[1].strip(), 16)) if "=" in thr else None
+
+
 def collect_system(cfg):
     """Stato della sonda: sistema, salute, rete e processo. Tutto opzionale: su hardware diverso
     dal Raspberry Pi alcuni dati (per esempio l'alimentazione) semplicemente mancano."""
@@ -1536,13 +1585,11 @@ def collect_system(cfg):
     t = _read("/sys/class/thermal/thermal_zone0/temp")
     info["temp_c"] = _safe(lambda: round(int(t) / 1000, 1)) if t else None
 
-    thr = _run([st["vcgencmd"], "get_throttled"]) if st["vcgencmd"] else ""
-    if "=" in thr:
-        value = _safe(lambda: int(thr.split("=")[1].strip(), 16))
-        if value is not None:
-            info["throttled_raw"] = hex(value)
-            info["throttled_now"] = sorted({d for b, d, now in THROTTLE_BITS if now and value >> b & 1})
-            info["throttled_past"] = sorted({d for b, d, now in THROTTLE_BITS if not now and value >> b & 1})
+    value = _throttled()
+    if value is not None:
+        info["throttled_raw"] = hex(value)
+        info["throttled_now"] = sorted({d for b, d, now in THROTTLE_BITS if now and value >> b & 1})
+        info["throttled_past"] = sorted({d for b, d, now in THROTTLE_BITS if not now and value >> b & 1})
 
     load = _safe(os.getloadavg)
     if load:

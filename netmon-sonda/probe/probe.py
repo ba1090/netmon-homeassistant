@@ -8,7 +8,7 @@ con cache, buffer letto e scritto a pezzi.
 Dipendenze (Debian, Raspberry Pi OS e simili): sudo apt install python3-yaml
 (fritzconnection, facoltativa, solo per il FRITZ!Box)
 """
-__version__ = "1.1.20261108-151109"
+__version__ = "1.1.20261108-152527"
 import http.client
 import fcntl
 import ipaddress
@@ -18,6 +18,7 @@ import os
 import platform
 import re
 import shutil
+import signal
 import socket
 import ssl
 import struct
@@ -218,6 +219,101 @@ class Http:
                 raise err
             return json.loads(raw or b"null")
         raise HttpError("nessuna risposta")
+
+
+# ---- riavvio dal watchdog hardware -------------------------------------------------------------
+# Con il watchdog hardware acceso, se il sistema si blocca del tutto il chip riavvia la sonda senza
+# spegnerla normalmente. La sonda se ne accorge così: quando systemd la ferma (spegnimento, riavvio,
+# aggiornamento) scrive in boot.json che si è fermata in modo pulito; alla partenza, se il sistema è
+# ripartito (boot_id nuovo) e quel segno manca, la sonda non è stata fermata. Il motivo può essere il
+# watchdog o la corrente mancata: il registro PM_RSTS del Raspberry Pi (dal firmware, nel device tree)
+# dice se il chip è partito da spento. Se non c'è, il riavvio si segnala come «probabile».
+BOOT_FILE = os.path.join(sysops.STATE_DIR, "boot.json")
+BOOT_ID = "/proc/sys/kernel/random/boot_id"
+RSTS_FILES = ("/proc/device-tree/chosen/bootloader/rsts", "/proc/device-tree/chosen/rsts")
+RSTS_POWER_ON = 0x1000            # PM_RSTS, bit HADPOR: il chip è partito da spento (corrente mancata o tolta)
+
+
+def started_from_power_off(paths=RSTS_FILES):
+    """True se il chip è partito da spento, False se l'ha riavviato il watchdog (o un riavvio normale),
+    None se il dispositivo non lo dice (non è un Raspberry Pi, firmware vecchio)."""
+    for path in paths:
+        try:
+            with open(path, "rb") as f:
+                raw = f.read(8)
+        except OSError:
+            continue
+        if len(raw) >= 4:
+            return bool(int.from_bytes(raw[:4], "big") & RSTS_POWER_ON)
+    return None
+
+
+class BootWatch:
+    """Riconosce il riavvio fatto dal watchdog hardware e lo conserva per il server (che avvisa una volta)."""
+
+    def __init__(self, path=BOOT_FILE, boot_id_path=BOOT_ID, watchdog_on=None, power_off=started_from_power_off,
+                 uptime=None, now=time.time):
+        self.path, self.boot_id_path, self.power_off, self.now = path, boot_id_path, power_off, now
+        self.watchdog_on = watchdog_on or (lambda: os.path.exists(sysops.WATCHDOG_CONF))
+        self.uptime = uptime or (lambda: float((_read("/proc/uptime") or "").split()[0]))
+        self.state = {}
+
+    def _load(self):
+        try:
+            with open(self.path, encoding="utf-8") as f:
+                v = json.load(f)
+            return v if isinstance(v, dict) else {}
+        except (OSError, ValueError):
+            return {}
+
+    def _save(self):
+        try:
+            os.makedirs(os.path.dirname(self.path) or ".", exist_ok=True)
+            tmp = self.path + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(self.state, f)
+            os.replace(tmp, self.path)
+        except OSError as exc:
+            log.error("Stato dell'avvio non salvato: %s", exc)
+
+    def start(self):
+        """Alla partenza della sonda. True se il sistema è appena ripartito per il watchdog hardware."""
+        try:
+            with open(self.boot_id_path, encoding="ascii") as f:
+                boot = f.read().strip()
+        except OSError:
+            return False
+        self.state = self._load()
+        found = False
+        prev = self.state.get("boot")
+        if prev and prev != boot and self.state.get("clean") is False and self.watchdog_on():
+            power = self.power_off()
+            if power is True:
+                log.warning("Avvio dopo uno spegnimento non pulito: il chip è partito da spento (corrente mancata)")
+            else:
+                try:
+                    at = self.now() - self.uptime()
+                except (OSError, ValueError, IndexError):
+                    at = self.now()
+                self.state.update(hw_at=round(at, 1), hw_sure=power is False)
+                found = True
+                log.warning("Avvio dopo un blocco del sistema: la sonda l'ha riavviata il watchdog hardware%s",
+                            "" if power is False else " (probabile: il dispositivo non dice se è mancata la corrente)")
+        self.state.update(boot=boot, clean=False)
+        self._save()
+        return found
+
+    def clean_stop(self):
+        """La sonda viene fermata da systemd: il prossimo avvio non è un blocco."""
+        if self.state.get("boot"):
+            self.state["clean"] = True
+            self._save()
+
+    def report(self):
+        """Ultimo riavvio del watchdog hardware, per il server."""
+        if not self.state.get("hw_at"):
+            return {}
+        return {"hw_wd_at": float(self.state["hw_at"]), "hw_wd_sure": bool(self.state.get("hw_sure"))}
 
 
 # ---- riavvio automatico quando il server non si raggiunge ------------------------------------
@@ -2477,6 +2573,15 @@ def main():
     sampler.start()
     last_contact = time.monotonic()      # ultimo scambio riuscito con il server
     watchdog = NetWatchdog()             # riavvio automatico dopo net_reboot minuti senza server
+    boot = BootWatch()                   # riavvio fatto dal watchdog hardware (non sulle sonde gestite da altri)
+    if not sysops.MANAGED_BY:
+        _safe(boot.start, False)
+
+        def stopped(signum, frame):        # fermata da systemd: segno di arresto pulito, poi esce come prima
+            _safe(boot.clean_stop, None)
+            signal.signal(signum, signal.SIG_DFL)
+            os.kill(os.getpid(), signum)
+        signal.signal(signal.SIGTERM, stopped)
     dup_error = False                    # il server rifiuta i dati: token usato da un altro dispositivo
     server_error_set(None)
     last_down, last_ok_log, sent_once = None, 0.0, False
@@ -2537,6 +2642,7 @@ def main():
             payload["system"]["server_ms"] = server_ms
         if isinstance(payload["system"], dict):
             payload["system"].update(watchdog.report())
+            payload["system"].update(boot.report())
         status_cmd = _safe(command_status, None)
         if status_cmd:
             payload["command_status"] = status_cmd

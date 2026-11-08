@@ -8,7 +8,7 @@ con cache, buffer letto e scritto a pezzi.
 Dipendenze (Debian, Raspberry Pi OS e simili): sudo apt install python3-yaml
 (fritzconnection, facoltativa, solo per il FRITZ!Box)
 """
-__version__ = "1.1.20261108-145745"
+__version__ = "1.1.20261108-151109"
 import http.client
 import fcntl
 import ipaddress
@@ -220,6 +220,152 @@ class Http:
         raise HttpError("nessuna risposta")
 
 
+# ---- riavvio automatico quando il server non si raggiunge ------------------------------------
+# Una sonda che non raggiunge più il server per net_reboot minuti (predefinito 30) si riavvia da sola,
+# al massimo net_reboot_max volte per ogni problema (predefinito 1; 0 = senza limite):
+# capita che il Wi-Fi o la rete del Raspberry Pi restino bloccati e che solo un riavvio li sblocchi.
+# Prima di riavviarsi controlla che il problema sia suo: se Internet funziona e il nome del server si
+# risolve, il guasto è del server (manutenzione, VM spenta) e un riavvio non servirebbe. Con più
+# tentativi, se dopo il riavvio il server resta irraggiungibile l'attesa raddoppia ogni volta (fino a
+# un giorno); al primo contatto riuscito conto e attesa ripartono da capo. Mai sulle sonde gestite da un altro sistema (Home Assistant).
+NET_REBOOT_DEFAULT = 30
+NET_REBOOT_MAX_DEFAULT = 1        # riavvii per ogni problema (0 = senza limite)
+NET_REBOOT_MAX_LIMIT = 20
+NET_REBOOT_MIN, NET_REBOOT_MAX = 10, 1440
+NET_REBOOT_WAIT_MAX = 86400
+NET_REBOOT_RECHECK = 300          # con Internet funzionante (guasto del server) si ricontrolla ogni 5 minuti
+WATCHDOG_FILE = os.path.join(sysops.STATE_DIR, "watchdog.json")
+INTERNET_PROBES = (("1.1.1.1", 443), ("8.8.8.8", 53), ("9.9.9.9", 443))
+
+
+def internet_ok(server_url, timeout=3):
+    """True se Internet risponde (per indirizzo IP) e il nome del server si risolve: allora il server
+    irraggiungibile è un problema del server, non della sonda."""
+    up = False
+    for host, port in INTERNET_PROBES:
+        try:
+            with socket.create_connection((host, port), timeout=timeout):
+                up = True
+                break
+        except OSError:
+            continue
+    if not up:
+        return False
+    name = urlsplit(server_url or "").hostname or ""
+    try:
+        ipaddress.ip_address(name)
+        return True                       # server indicato per IP: niente nome da risolvere
+    except ValueError:
+        pass
+    try:
+        socket.getaddrinfo(name, 443, type=socket.SOCK_STREAM)
+        return True
+    except (OSError, UnicodeError):
+        return False                      # DNS bloccato: un riavvio può servire
+
+
+class NetWatchdog:
+    """Conta da quanto il server non risponde e, passato il tempo scelto, riavvia la sonda."""
+
+    def __init__(self, path=WATCHDOG_FILE, clock=time.monotonic, internet=internet_ok, reboot=None):
+        self.path, self.clock, self.internet = path, clock, internet
+        self.reboot = reboot or (lambda: sysops.reboot(delay=5))
+        self.last_contact = clock()       # anche una sonda appena accesa aspetta il tempo intero
+        self.next_check = 0.0
+        self.state = self._load()         # {"count": riavvii di fila senza contatto, "at", "minutes"}
+        self.said = None                  # ultimo motivo scritto nel registro (una volta sola)
+
+    def _load(self):
+        try:
+            with open(self.path, encoding="utf-8") as f:
+                v = json.load(f)
+            return v if isinstance(v, dict) else {}
+        except (OSError, ValueError):
+            return {}
+
+    def _save(self):
+        try:
+            os.makedirs(os.path.dirname(self.path) or ".", exist_ok=True)
+            tmp = self.path + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(self.state, f)
+            os.replace(tmp, self.path)
+        except OSError as exc:
+            log.error("Stato del riavvio automatico non salvato: %s", exc)
+
+    def contact(self):
+        """Il server ha risposto (anche con un errore): la rete della sonda funziona."""
+        self.last_contact = self.clock()
+        self.said = None
+        if self.state.get("count"):
+            self.state["count"] = 0
+            self._save()
+
+    def wait(self, minutes):
+        """Secondi senza server prima di riavviarsi: raddoppiano a ogni riavvio che non è servito."""
+        n = max(0, int(self.state.get("count") or 0))
+        return min(NET_REBOOT_WAIT_MAX, minutes * 60 * 2 ** min(n, 7))
+
+    def _say(self, what, msg, *args):
+        if self.said != what:
+            self.said = what
+            log.warning(msg, *args)
+
+    def check(self, cfg, all_down=None):
+        """Da chiamare a ogni ciclo. True se ha avviato il riavvio. all_down: nessun dispositivo ha risposto
+        nell'ultimo ciclo (con net_reboot_lan la sonda si riavvia solo allora)."""
+        try:
+            minutes = int(cfg.get("net_reboot", NET_REBOOT_DEFAULT) or 0)
+        except (TypeError, ValueError):
+            minutes = NET_REBOOT_DEFAULT
+        if minutes <= 0:
+            return False
+        try:
+            limit = int(cfg.get("net_reboot_max", NET_REBOOT_MAX_DEFAULT))
+        except (TypeError, ValueError):
+            limit = NET_REBOOT_MAX_DEFAULT
+        now = self.clock()
+        silent = now - self.last_contact
+        if silent < self.wait(minutes) or now < self.next_check:
+            return False
+        self.next_check = now + NET_REBOOT_RECHECK
+        if sysops.MANAGED_BY:
+            self._say("managed", "Server irraggiungibile da %d minuti: la sonda è gestita da %s, niente riavvio "
+                                 "automatico", silent // 60, sysops.MANAGED_BY)
+            return False
+        if cfg.get("net_reboot_lan", True) is not False and all_down is not True:
+            self._say("lan", "Server irraggiungibile da %d minuti ma i dispositivi di casa rispondono: la rete "
+                             "della sonda funziona, niente riavvio (scelto: solo se nessun dispositivo risponde)",
+                      silent // 60)
+            return False
+        n = int(self.state.get("count") or 0)
+        if limit > 0 and n >= limit:              # prima della prova di Internet: lì serve la rete
+            self._say("limit", "Server irraggiungibile da %d minuti: già fatti %d riavvii automatici (il massimo "
+                               "scelto), niente altri finché il server non risponde", silent // 60, n)
+            return False
+        if self.internet(cfg.get("server_url")):
+            self._say("server", "Server irraggiungibile da %d minuti ma Internet funziona: guasto del server, "
+                                "niente riavvio", silent // 60)
+            return False
+        self.state = {"count": n + 1, "at": time.time(), "minutes": int(silent // 60)}
+        self._save()
+        ok, msg = self.reboot()
+        if ok:
+            log.warning("Server irraggiungibile da %d minuti e Internet assente: riavvio della sonda "
+                        "(riavvio automatico n. %d di fila)", silent // 60, n + 1)
+        else:
+            self._say("noreboot", "Server irraggiungibile da %d minuti: riavvio automatico non possibile (%s)",
+                      silent // 60, msg)
+            self.last_contact = now       # riprova dopo un altro periodo intero
+        return ok
+
+    def report(self):
+        """Ultimo riavvio automatico, per il server (che lo dice all'utente una volta)."""
+        if not self.state.get("at"):
+            return {}
+        return {"watchdog_at": float(self.state["at"]), "watchdog_min": int(self.state.get("minutes") or 0)}
+
+
 def load_config():
     with open(CONFIG_PATH, encoding="utf-8") as f:
         cfg = yaml.safe_load(f)
@@ -243,6 +389,9 @@ def load_config():
     cfg.setdefault("devices_max", 30)        # dispositivi controllabili (lo decide l'amministratore)
     cfg.setdefault("traffic_interval", 30)
     cfg.setdefault("ping_parallel", 2)       # ping contemporanei (1 = uno alla volta)   # secondi tra due campioni di traffico (0 = disattivato)
+    cfg.setdefault("net_reboot", NET_REBOOT_DEFAULT)   # minuti senza server prima di riavviarsi (0 = mai)
+    cfg.setdefault("net_reboot_max", NET_REBOOT_MAX_DEFAULT)   # quante volte per ogni problema (0 = senza limite)
+    cfg.setdefault("net_reboot_lan", True)   # riavvio solo se nemmeno i dispositivi di casa rispondono
     if not cfg.get("devices"):
         raise ValueError("nessun dispositivo in config.yaml")
     return cfg
@@ -251,11 +400,12 @@ def load_config():
 # Campi gestibili anche dalla pagina del server (server_url, token e probe_name restano locali)
 SHARED = ("devices", "interval", "ping_count", "ping_timeout", "fail_threshold",
           "alert_mode", "stale_factor", "offline_factor", "stale_seconds", "offline_seconds",
-          "traffic_interval", "ping_parallel", "probe_name", "fritz_max", "devices_max")
+          "traffic_interval", "ping_parallel", "probe_name", "fritz_max", "devices_max", "net_reboot",
+          "net_reboot_max", "net_reboot_lan")
 
 
 def shared_config(cfg):
-    return {k: cfg[k] for k in SHARED}
+    return {k: cfg[k] for k in SHARED if k in cfg}
 
 
 def valid_host(h):
@@ -298,6 +448,19 @@ def clean_remote(cfg, new):
     t = new.get("traffic_interval")
     if isinstance(t, int) and not isinstance(t, bool) and (t == 0 or 2 <= t <= 300):
         out["traffic_interval"] = t
+    nr = new.get("net_reboot")              # assente o None (server vecchio): resta quello attuale
+    if isinstance(nr, int) and not isinstance(nr, bool) and (nr == 0 or NET_REBOOT_MIN <= nr <= NET_REBOOT_MAX):
+        out["net_reboot"] = nr
+    elif nr is not None:
+        log.warning("Configurazione dal server: valore non valido per net_reboot, mantengo %s", cfg.get("net_reboot"))
+    if isinstance(new.get("net_reboot_lan"), bool):
+        out["net_reboot_lan"] = new["net_reboot_lan"]
+    nm = new.get("net_reboot_max")
+    if isinstance(nm, int) and not isinstance(nm, bool) and 0 <= nm <= NET_REBOOT_MAX_LIMIT:
+        out["net_reboot_max"] = nm
+    elif nm is not None:
+        log.warning("Configurazione dal server: valore non valido per net_reboot_max, mantengo %s",
+                    cfg.get("net_reboot_max"))
     if new.get("alert_mode") in ("proporzionale", "fisso"):
         out["alert_mode"] = new["alert_mode"]
     if isinstance(new.get("probe_name"), str) and NAME_RE.match(new["probe_name"]):
@@ -552,7 +715,7 @@ REBOOT_GAP = 600      # secondi minimi tra due riavvii chiesti dal server
 
 def handle_command(requested, cfg=None):
     """Esegue un comando arrivato dal server, una sola volta per identificativo."""
-    if not isinstance(requested, dict) or requested.get("cmd") not in ("reboot", "upgrade", "update", "wifi"):
+    if not isinstance(requested, dict) or requested.get("cmd") not in ("reboot", "upgrade", "update", "wifi", "watchdog"):
         return
     current = load_command()
     if current and current.get("id") == requested.get("id"):
@@ -568,6 +731,13 @@ def handle_command(requested, cfg=None):
         cmd.update(state="done" if ok else "error", output=message, finished=time.time())
         save_command(cmd)                              # salvato PRIMA che il sistema si riavvii
         log.warning("Comando dal server: riavvio · %s", message)
+    elif requested["cmd"] == "watchdog":
+        on = requested.get("on") is True
+        cmd["on"] = on
+        ok, message = sysops.hw_watchdog_set(on)
+        cmd.update(state="done" if ok else "error", output=message, finished=time.time())
+        save_command(cmd)
+        log.warning("Comando dal server: watchdog hardware %s · %s", "acceso" if on else "spento", message)
     elif requested["cmd"] == "wifi":
         # rete Wi-Fi: la password va solo allo script di root, non in command.json né nel registro
         w = requested.get("wifi") if isinstance(requested.get("wifi"), dict) else {}
@@ -1638,6 +1808,9 @@ def collect_system(cfg):
     info["server_change"] = True                  # e il nuovo indirizzo del server chiesto dalla pagina
     w = wifi_state()
     info["wifi_nm"], info["wifi_cmd"], info["wifi_known"], info["wifi_why"] = w["nm"], w["cmd"], w["known"], w["why"]
+    hw = _safe(sysops.hw_watchdog_state, None)
+    if hw is not None:                    # watchdog hardware: acceso? e se non si può cambiare, perché
+        info["hw_wd"], info["hw_wd_why"] = hw["on"], hw["why"]
     up = _safe(sysops.upgrade_status, {}) or {}
     info["upgrade_state"] = up.get("state")
     info["upgrade_finished"] = up.get("finished")
@@ -2303,6 +2476,7 @@ def main():
     sampler.cfg = cfg
     sampler.start()
     last_contact = time.monotonic()      # ultimo scambio riuscito con il server
+    watchdog = NetWatchdog()             # riavvio automatico dopo net_reboot minuti senza server
     dup_error = False                    # il server rifiuta i dati: token usato da un altro dispositivo
     server_error_set(None)
     last_down, last_ok_log, sent_once = None, 0.0, False
@@ -2330,6 +2504,7 @@ def main():
         cycle += 1
         results = run_pings(devices, cfg, cycle)
         down = [n for n, (ok, _) in results.items() if not ok]
+        all_down = bool(results) and len(down) == len(results)
         if down != last_down or start - last_ok_log >= LOG_OK_EVERY:
             log.info("OK %d/%d%s", len(results) - len(down), len(results),
                      f" — giù: {', '.join(down)}" if down else "")
@@ -2342,6 +2517,7 @@ def main():
         measured = {n: {"ok": ok, "host": str(devices[n]), "rtt": rtt} for n, (ok, rtt) in results.items()}
         for n, port in (_safe(lambda: port_check(devices, down), {}) or {}).items():
             measured[n]["port"] = port              # niente ping, ma il servizio risponde
+            all_down = False                        # una porta che risponde: la rete di casa funziona
         record = {"ts": time.time(), "devices": measured}
         payload = {"probe": cfg["probe_name"], "interval": cfg["interval"],
                    "thresholds": thresholds(cfg), "config_rev": int(cfg["config_rev"]),
@@ -2359,6 +2535,8 @@ def main():
         payload["system"] = _safe(lambda: collect_system(cfg), None)
         if server_ms is not None and isinstance(payload["system"], dict):
             payload["system"]["server_ms"] = server_ms
+        if isinstance(payload["system"], dict):
+            payload["system"].update(watchdog.report())
         status_cmd = _safe(command_status, None)
         if status_cmd:
             payload["command_status"] = status_cmd
@@ -2385,6 +2563,7 @@ def main():
                 raise ValueError("risposta del server non valida")
             server_ms = round((time.monotonic() - t_send) * 1000)
             last_contact = time.monotonic()
+            watchdog.contact()
             if dup_error:
                 dup_error = False
                 server_error_set(None)
@@ -2413,6 +2592,8 @@ def main():
             # Se il server è indietro o non ha ancora la configurazione, gliela mando
             push_config = server_rev < int(cfg["config_rev"]) or not reply.get("has_config")
         except (OSError, ValueError) as exc:
+            if getattr(exc, "status", None) is not None or isinstance(exc, (ProbeMoved, ValueError)):
+                watchdog.contact()                # il server ha risposto: la rete della sonda funziona
             if isinstance(exc, ProbeMoved):
                 follow_move(cfg, exc.url)
             elif getattr(exc, "status", None) == 409:
@@ -2429,6 +2610,7 @@ def main():
             except OSError as buf_exc:
                 log.error("Impossibile scrivere il buffer: %s", buf_exc)
         del payload, record, results, measured, traffic, traffic_by_box, speed, scan
+        _safe(lambda: watchdog.check(cfg, all_down=all_down), False)
 
         # Attesa fino al prossimo controllo. La risposta al report porta già configurazione e
         # comandi: il server viene interrogato a parte solo se è passato config_poll secondi
@@ -2446,11 +2628,14 @@ def main():
                 try:
                     cfg, changed = poll_config(client, cfg)
                     last_contact = time.monotonic()
+                    watchdog.contact()
                     if changed:
                         mtime = os.path.getmtime(CONFIG_PATH)
                         break   # riparte subito con la nuova configurazione
                 except (OSError, ValueError) as exc:
                     last_contact = time.monotonic()       # riprova al giro successivo, non subito
+                    if getattr(exc, "status", None) is not None or isinstance(exc, ProbeMoved):
+                        watchdog.contact()
                     if isinstance(exc, ProbeMoved):
                         follow_move(cfg, exc.url)
                         break                             # riparte subito verso la VM nuova

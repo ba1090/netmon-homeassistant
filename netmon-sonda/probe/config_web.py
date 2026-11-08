@@ -16,7 +16,7 @@
 
 Dipendenze: python3-yaml (già installato per la sonda).
 """
-__version__ = "1.1.20261108-145745"
+__version__ = "1.1.20261108-151109"
 import base64
 import hmac
 import ipaddress
@@ -182,7 +182,8 @@ log = logging.getLogger("config-web")
 DEFAULTS = {"config_rev": 0, "config_poll": 60, "traffic_interval": 30, "ping_parallel": 2, "fritz_enabled": False, "fritz_host": "",
             "fritz_user": "", "fritz_password": "", "fritz_more": [], "fritz_max": 4, "devices_max": 30, "interval": 60, "ping_count": 2, "ping_timeout": 1, "fail_threshold": 3,
             "alert_mode": "proporzionale", "stale_factor": 1.5, "offline_factor": 3,
-            "stale_seconds": 90, "offline_seconds": 180}
+            "stale_seconds": 90, "offline_seconds": 180, "net_reboot": 30, "net_reboot_max": 1,
+            "net_reboot_lan": True}
 
 NUMERIC_LABELS = {"config_poll": "Controllo configurazioni dal server",
                   "traffic_interval": "Campionamento del traffico",
@@ -194,7 +195,10 @@ NUMERIC_LABELS = {"config_poll": "Controllo configurazioni dal server",
                   "stale_factor": "Sonda in ritardo dopo (intervalli)",
                   "offline_factor": "Sonda irraggiungibile dopo (intervalli)",
                   "stale_seconds": "Sonda in ritardo dopo (secondi)",
-                  "offline_seconds": "Sonda irraggiungibile dopo (secondi)"}
+                  "offline_seconds": "Sonda irraggiungibile dopo (secondi)",
+                  # dal server (scheda Controlli): la pagina non lo mostra, ma salvando non va perso
+                  "net_reboot": "Riavvio automatico senza server (minuti)",
+                  "net_reboot_max": "Riavvii automatici per ogni problema"}
 
 # \Z e non $: $ accetta anche un a capo finale («router\n»)
 NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 _.\-]{0,39}\Z")
@@ -333,6 +337,9 @@ def validate(data, current=None):
         "fritz_max": max(0, min(8, int(FRITZ_MAX if base.get("fritz_max") in (None, "") else base["fritz_max"]))),
         # Anche questo arriva dal server: quanti dispositivi può controllare la sonda
         "devices_max": max(1, min(200, int(base.get("devices_max") or DEVICES_MAX))),
+        # dal server (Controlli): riavvio automatico solo se nemmeno i dispositivi rispondono
+        "net_reboot_lan": (data["net_reboot_lan"] if isinstance(data.get("net_reboot_lan"), bool)
+                           else base.get("net_reboot_lan") is not False),   # dal ripristino di un backup
         # lingua della pagina: si cambia con il selettore in alto (/api/language)
         "language": base.get("language") if base.get("language") in LANGS else "it",
     }
@@ -361,6 +368,10 @@ def validate(data, current=None):
         errors.append("Il controllo delle configurazioni deve essere 0 (disattivato) o tra 10 e 3600 secondi.")
     if cfg["traffic_interval"] != 0 and not 2 <= cfg["traffic_interval"] <= 300:
         errors.append("Il campionamento del traffico deve essere 0 (disattivato) o tra 2 e 300 secondi.")
+    if cfg["net_reboot"] != 0 and not 10 <= cfg["net_reboot"] <= 1440:
+        errors.append("Il riavvio automatico senza server deve essere 0 (mai) o tra 10 e 1440 minuti.")
+    if not 0 <= cfg["net_reboot_max"] <= 20:
+        errors.append("I riavvii automatici per ogni problema devono essere tra 0 (senza limite) e 20.")
     if not 1 <= cfg["ping_parallel"] <= 16:
         errors.append("I ping contemporanei devono essere tra 1 e 16.")
     if not 10 <= cfg["interval"] <= 3600:
@@ -428,7 +439,8 @@ def write_config(cfg):
 # Campi della configurazione che il server conosce (uguali a SHARED in probe.py)
 SHARED_KEYS = ("devices", "interval", "ping_count", "ping_timeout", "fail_threshold",
                "alert_mode", "stale_factor", "offline_factor", "stale_seconds", "offline_seconds",
-               "traffic_interval", "ping_parallel", "probe_name", "fritz_max", "devices_max")
+               "traffic_interval", "ping_parallel", "probe_name", "fritz_max", "devices_max", "net_reboot",
+               "net_reboot_max", "net_reboot_lan")
 
 
 def backup_payload():
@@ -728,6 +740,7 @@ class Handler(BaseHTTPRequestHandler):
             except (OSError, yaml.YAMLError):
                 server_url = ""
             self.send_json({"can_reboot": sysops.can_sudo(sysops.REBOOT_CMD),
+                            "hw_watchdog": sysops.hw_watchdog_state(),
                             "upgrade": st, "log": sysops.upgrade_log(6000) if st.get("state") != "none" else "",
                             "selfupdate": nm, "self_log": nm_log,
                             "version": __version__,
@@ -818,6 +831,14 @@ class Handler(BaseHTTPRequestHandler):
             ok, message = sysops.uninstall(delay=2)
             log.warning("Disinstallazione richiesta dalla pagina locale: %s", message)
             return self.send_json({"ok": ok, "message": message}, 200 if ok else 409)
+
+        if self.path == "/api/system/watchdog":
+            # watchdog hardware: acceso o spento con netprobe-watchdog (root, via sudo solo «si» e «no»)
+            on = data.get("on") is True
+            ok, message = sysops.hw_watchdog_set(on)
+            log.warning("Watchdog hardware %s dalla pagina locale: %s", "acceso" if on else "spento", message)
+            return self.send_json({"ok": ok, "message": message, "state": sysops.hw_watchdog_state()},
+                                  200 if ok else 409)
 
         if self.path == "/api/system/reboot":
             ok, message = sysops.reboot(delay=3)
@@ -1244,6 +1265,13 @@ select.pill:hover{border-color:var(--muted)}
     <div class="panel-actions">
       <button type="button" id="sys-reboot" class="danger">Riavvia la sonda</button>
     </div>
+    <div id="wd-box" hidden style="margin-top:18px;padding-top:12px;border-top:1px solid var(--line)">
+      <p class="hint"><b>Watchdog hardware</b>: <span id="wd-state"></span></p>
+      <div class="panel-actions"><button type="button" id="wd-toggle"></button></div>
+      <p class="hint" id="wd-why" hidden></p>
+      <p class="hint">Se il sistema della sonda si blocca del tutto (non solo la rete), il chip del Raspberry Pi la riavvia dopo 15 secondi.</p>
+      <div class="result" id="wd-result" role="status"></div>
+    </div>
     <div class="result" id="nm-result" role="status"></div>
     <details id="nm-log-box" class="arrow" hidden>
       <summary>Registro dell'ultimo aggiornamento di netmon (comandato dal server)</summary>
@@ -1604,7 +1632,8 @@ async function loadSystem() {
     nmWatching = false;
     if (data.version !== nmStartedVersion) return location.reload();
   }
-  if (data.managed_by) return managedBy(data.managed_by);
+  if (data.managed_by) { $("#wd-box").hidden = true; return managedBy(data.managed_by); }
+  wdShow(data.hw_watchdog);
   $("#sys-reboot").disabled = running || !data.can_reboot;
   if (!data.can_reboot) {
     sysResult("Permessi non configurati: installa /etc/sudoers.d/netprobe come descritto nella guida.", "bad");
@@ -1635,6 +1664,36 @@ function managedBy(name) {
     if (!del.sec.hidden) showSection(SECTIONS[0].key);
   }
 }
+
+// Watchdog hardware: stato letto dalla sonda; acceso o spento con il suo programma di root
+let wdOn = false;
+function wdShow(w) {
+  $("#wd-box").hidden = !w;
+  if (!w) return;
+  wdOn = !!w.on;
+  $("#wd-state").textContent = wdOn ? "attivo" : "spento";
+  const why = {
+    device: "Questo dispositivo non ha un watchdog hardware utilizzabile.",
+    script: "Manca il programma del watchdog: aggiorna la sonda con sudo bash installa-sonda.sh --aggiorna.",
+    sudo: "Manca il permesso per il watchdog in /etc/sudoers.d/netprobe: aggiorna la sonda con sudo bash installa-sonda.sh --aggiorna.",
+  }[w.why];
+  $("#wd-why").hidden = !why;
+  $("#wd-why").textContent = why || "";
+  $("#wd-toggle").hidden = !!why;
+  $("#wd-toggle").textContent = wdOn ? "Spegni il watchdog" : "Attiva il watchdog";
+  $("#wd-toggle").className = wdOn ? "" : "primary";
+}
+$("#wd-toggle").onclick = async () => {
+  if (wdOn && !confirm("Spegnere il watchdog hardware? Se il sistema si blocca, la sonda non si riavvierà da sola.")) return;
+  $("#wd-toggle").disabled = true;
+  try {
+    const { data } = await api("/api/system/watchdog", { on: !wdOn });
+    const out = $("#wd-result");
+    out.className = "result " + (data.ok ? "ok" : "bad");
+    out.textContent = data.message || (data.ok ? "Fatto." : "Operazione non riuscita.");
+    if (data.state) wdShow(data.state);
+  } finally { $("#wd-toggle").disabled = false; }
+};
 
 $("#sys-reboot").onclick = async () => {
   if (!confirm("Riavviare la sonda? Per circa un minuto non invierà dati e questa pagina non sarà raggiungibile.")) return;
@@ -2035,6 +2094,24 @@ TRANSLATIONS = {
     "I moltiplicatori devono essere tra 1 e 20.": "Die Faktoren müssen zwischen 1 und 20 liegen.",
     "I pacchetti ping per controllo devono essere tra 1 e 10.": "Die Ping-Pakete pro Prüfung müssen zwischen 1 und 10 liegen.",
     "I ping contemporanei devono essere tra 1 e 16.": "Die gleichzeitigen Pings müssen zwischen 1 und 16 liegen.",
+    "Il riavvio automatico senza server deve essere 0 (mai) o tra 10 e 1440 minuti.": "Der automatische Neustart ohne Server muss 0 (nie) oder zwischen 10 und 1440 Minuten liegen.",
+    "Riavvio automatico senza server (minuti)": "Automatischer Neustart ohne Server (Minuten)",
+    "Riavvii automatici per ogni problema": "Automatische Neustarts pro Problem",
+    "I riavvii automatici per ogni problema devono essere tra 0 (senza limite) e 20.": "Die automatischen Neustarts pro Problem müssen zwischen 0 (ohne Grenze) und 20 liegen.",
+    "Watchdog hardware": "Hardware-Watchdog",
+    "attivo": "aktiv",
+    "spento": "aus",
+    "Attiva il watchdog": "Watchdog einschalten",
+    "Spegni il watchdog": "Watchdog ausschalten",
+    "Questo dispositivo non ha un watchdog hardware utilizzabile.": "Dieses Gerät hat keinen nutzbaren Hardware-Watchdog.",
+    "Manca il programma del watchdog: aggiorna la sonda con sudo bash installa-sonda.sh --aggiorna.": "Das Watchdog-Programm fehlt: aktualisiere die Sonde mit sudo bash installa-sonda.sh --aggiorna.",
+    "Manca il permesso per il watchdog in /etc/sudoers.d/netprobe: aggiorna la sonda con sudo bash installa-sonda.sh --aggiorna.": "Die Berechtigung für den Watchdog fehlt in /etc/sudoers.d/netprobe: aktualisiere die Sonde mit sudo bash installa-sonda.sh --aggiorna.",
+    "Se il sistema della sonda si blocca del tutto (non solo la rete), il chip del Raspberry Pi la riavvia dopo 15 secondi.": "Wenn das System der Sonde komplett hängt (nicht nur das Netzwerk), startet der Chip des Raspberry Pi sie nach 15 Sekunden neu.",
+    "Spegnere il watchdog hardware? Se il sistema si blocca, la sonda non si riavvierà da sola.": "Hardware-Watchdog ausschalten? Wenn das System hängt, startet die Sonde nicht von selbst neu.",
+    "Watchdog hardware attivo: se il sistema si blocca, la sonda si riavvia da sola.": "Hardware-Watchdog aktiv: Wenn das System hängt, startet die Sonde von selbst neu.",
+    "Watchdog hardware spento.": "Hardware-Watchdog aus.",
+    "Serve l'aggiornamento completo della sonda (sudo bash installa-sonda.sh --aggiorna): manca il programma o il permesso del watchdog.": "Ein vollständiges Update der Sonde ist nötig (sudo bash installa-sonda.sh --aggiorna): Programm oder Berechtigung des Watchdogs fehlen.",
+    "Watchdog hardware non disponibile su questo dispositivo (nessun /dev/watchdog, container o già usato da un altro programma).": "Hardware-Watchdog auf diesem Gerät nicht verfügbar (kein /dev/watchdog, Container oder bereits von einem anderen Programm genutzt).",
     "Il backup contiene più sonde: quale ripristinare?": "Die Sicherung enthält mehrere Sonden: welche wiederherstellen?",
     "Il backup del server non contiene configurazioni di sonde.": "Die Sicherung des Servers enthält keine Sondenkonfigurationen.",
     "Il backup della sonda è vuoto o danneggiato.": "Die Sicherung der Sonde ist leer oder beschädigt.",
@@ -2241,6 +2318,24 @@ TRANSLATIONS = {
     "I moltiplicatori devono essere tra 1 e 20.": "The multipliers must be between 1 and 20.",
     "I pacchetti ping per controllo devono essere tra 1 e 10.": "Ping packets per check must be between 1 and 10.",
     "I ping contemporanei devono essere tra 1 e 16.": "Parallel pings must be between 1 and 16.",
+    "Il riavvio automatico senza server deve essere 0 (mai) o tra 10 e 1440 minuti.": "Automatic restart without server must be 0 (never) or between 10 and 1440 minutes.",
+    "Riavvio automatico senza server (minuti)": "Automatic restart without server (minutes)",
+    "Riavvii automatici per ogni problema": "Automatic restarts per problem",
+    "I riavvii automatici per ogni problema devono essere tra 0 (senza limite) e 20.": "Automatic restarts per problem must be between 0 (no limit) and 20.",
+    "Watchdog hardware": "Hardware watchdog",
+    "attivo": "on",
+    "spento": "off",
+    "Attiva il watchdog": "Turn on the watchdog",
+    "Spegni il watchdog": "Turn off the watchdog",
+    "Questo dispositivo non ha un watchdog hardware utilizzabile.": "This device has no usable hardware watchdog.",
+    "Manca il programma del watchdog: aggiorna la sonda con sudo bash installa-sonda.sh --aggiorna.": "The watchdog program is missing: update the probe with sudo bash installa-sonda.sh --aggiorna.",
+    "Manca il permesso per il watchdog in /etc/sudoers.d/netprobe: aggiorna la sonda con sudo bash installa-sonda.sh --aggiorna.": "The watchdog permission is missing in /etc/sudoers.d/netprobe: update the probe with sudo bash installa-sonda.sh --aggiorna.",
+    "Se il sistema della sonda si blocca del tutto (non solo la rete), il chip del Raspberry Pi la riavvia dopo 15 secondi.": "If the probe's system freezes completely (not just the network), the Raspberry Pi chip restarts it after 15 seconds.",
+    "Spegnere il watchdog hardware? Se il sistema si blocca, la sonda non si riavvierà da sola.": "Turn off the hardware watchdog? If the system freezes, the probe will not restart by itself.",
+    "Watchdog hardware attivo: se il sistema si blocca, la sonda si riavvia da sola.": "Hardware watchdog on: if the system freezes, the probe restarts by itself.",
+    "Watchdog hardware spento.": "Hardware watchdog off.",
+    "Serve l'aggiornamento completo della sonda (sudo bash installa-sonda.sh --aggiorna): manca il programma o il permesso del watchdog.": "A full update of the probe is needed (sudo bash installa-sonda.sh --aggiorna): the watchdog program or permission is missing.",
+    "Watchdog hardware non disponibile su questo dispositivo (nessun /dev/watchdog, container o già usato da un altro programma).": "Hardware watchdog not available on this device (no /dev/watchdog, container or already used by another program).",
     "Il backup contiene più sonde: quale ripristinare?": "The backup contains several probes: which one to restore?",
     "Il backup del server non contiene configurazioni di sonde.": "The server backup contains no probe configurations.",
     "Il backup della sonda è vuoto o danneggiato.": "The probe backup is empty or damaged.",
@@ -2447,6 +2542,24 @@ TRANSLATIONS = {
     "I moltiplicatori devono essere tra 1 e 20.": "Les multiplicateurs doivent être entre 1 et 20.",
     "I pacchetti ping per controllo devono essere tra 1 e 10.": "Les paquets ping par contrôle doivent être entre 1 et 10.",
     "I ping contemporanei devono essere tra 1 e 16.": "Les pings simultanés doivent être entre 1 et 16.",
+    "Il riavvio automatico senza server deve essere 0 (mai) o tra 10 e 1440 minuti.": "Le redémarrage automatique sans serveur doit être 0 (jamais) ou entre 10 et 1440 minutes.",
+    "Riavvio automatico senza server (minuti)": "Redémarrage automatique sans serveur (minutes)",
+    "Riavvii automatici per ogni problema": "Redémarrages automatiques par problème",
+    "I riavvii automatici per ogni problema devono essere tra 0 (senza limite) e 20.": "Les redémarrages automatiques par problème doivent être entre 0 (sans limite) et 20.",
+    "Watchdog hardware": "Watchdog matériel",
+    "attivo": "actif",
+    "spento": "désactivé",
+    "Attiva il watchdog": "Activer le watchdog",
+    "Spegni il watchdog": "Désactiver le watchdog",
+    "Questo dispositivo non ha un watchdog hardware utilizzabile.": "Cet appareil n'a pas de watchdog matériel utilisable.",
+    "Manca il programma del watchdog: aggiorna la sonda con sudo bash installa-sonda.sh --aggiorna.": "Le programme du watchdog manque : mettez à jour la sonde avec sudo bash installa-sonda.sh --aggiorna.",
+    "Manca il permesso per il watchdog in /etc/sudoers.d/netprobe: aggiorna la sonda con sudo bash installa-sonda.sh --aggiorna.": "L'autorisation du watchdog manque dans /etc/sudoers.d/netprobe : mettez à jour la sonde avec sudo bash installa-sonda.sh --aggiorna.",
+    "Se il sistema della sonda si blocca del tutto (non solo la rete), il chip del Raspberry Pi la riavvia dopo 15 secondi.": "Si le système de la sonde se bloque complètement (pas seulement le réseau), la puce du Raspberry Pi la redémarre après 15 secondes.",
+    "Spegnere il watchdog hardware? Se il sistema si blocca, la sonda non si riavvierà da sola.": "Désactiver le watchdog matériel ? Si le système se bloque, la sonde ne redémarrera pas d'elle-même.",
+    "Watchdog hardware attivo: se il sistema si blocca, la sonda si riavvia da sola.": "Watchdog matériel actif : si le système se bloque, la sonde redémarre d'elle-même.",
+    "Watchdog hardware spento.": "Watchdog matériel désactivé.",
+    "Serve l'aggiornamento completo della sonda (sudo bash installa-sonda.sh --aggiorna): manca il programma o il permesso del watchdog.": "Une mise à jour complète de la sonde est nécessaire (sudo bash installa-sonda.sh --aggiorna) : le programme ou l'autorisation du watchdog manque.",
+    "Watchdog hardware non disponibile su questo dispositivo (nessun /dev/watchdog, container o già usato da un altro programma).": "Watchdog matériel non disponible sur cet appareil (pas de /dev/watchdog, conteneur ou déjà utilisé par un autre programme).",
     "Il backup contiene più sonde: quale ripristinare?": "La sauvegarde contient plusieurs sondes : laquelle restaurer ?",
     "Il backup del server non contiene configurazioni di sonde.": "La sauvegarde du serveur ne contient aucune configuration de sonde.",
     "Il backup della sonda è vuoto o danneggiato.": "La sauvegarde de la sonde est vide ou endommagée.",

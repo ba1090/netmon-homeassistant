@@ -18,7 +18,7 @@ installa-sonda.sh --aggiorna. Con un server vecchio si usa l'aggiornamento dei s
 Log e stato degli aggiornamenti li scrive root in SYS_DIR (cartella di root, qui solo letta):
 nella cartella della sonda, scrivibile dal servizio, root non scrive più nulla.
 """
-__version__ = "1.1.20261108-145745"
+__version__ = "1.1.20261108-151109"
 import base64
 import hashlib
 import json
@@ -46,6 +46,7 @@ MANAGED_TEXT = {
     "update": lambda n: f"La sonda è gestita da {n}: netmon si aggiorna da lì.",
     "wifi": lambda n: f"La sonda è gestita da {n}: le reti Wi-Fi si gestiscono da lì.",
     "uninstall": lambda n: f"La sonda è gestita da {n}: si disinstalla da lì.",
+    "watchdog": lambda n: f"La sonda è gestita da {n}: il watchdog si gestisce da lì.",
 }
 
 
@@ -498,6 +499,60 @@ def start_zipupdate() -> tuple[bool, str]:
     if r.returncode != 0:
         return False, "Avvio non riuscito: " + (r.stderr.strip() or f"codice {r.returncode}")[:300]
     return True, "Aggiornamento avviato: la sonda si riavvierà tra poco."
+
+
+# ------------------------------------------------------------------ watchdog hardware
+# Acceso o spento da /usr/local/sbin/netprobe-watchdog (root, via sudo solo con «si» e «no»), lo stesso
+# programma che usa installa-sonda.sh. Lo stato si legge senza privilegi: file di systemd e scelta.
+WATCHDOG_SCRIPT = "/usr/local/sbin/netprobe-watchdog"
+WATCHDOG_CONF = "/etc/systemd/system.conf.d/netmon-watchdog.conf"
+WATCHDOG_DEV = "/dev/watchdog"
+_wdog_cap = {}
+WATCHDOG_RECHECK = 600
+
+
+def hw_watchdog_problem() -> str:
+    """Perché la sonda non può accendere o spegnere il watchdog hardware ("" se può): gestita da un
+    altro sistema, nessun watchdog sul dispositivo, programma mancante, permesso sudo mancante."""
+    if MANAGED_BY:
+        return "managed"
+    if not os.path.exists(WATCHDOG_DEV):
+        return "device"
+    if not os.path.exists(WATCHDOG_SCRIPT):
+        return "script"
+    if not (can_sudo([WATCHDOG_SCRIPT, "si"]) and can_sudo([WATCHDOG_SCRIPT, "no"])):
+        return "sudo"
+    return ""
+
+
+def hw_watchdog_state() -> dict:
+    """{"on": acceso, "why": motivo per cui non si può cambiare ("" se si può)}. Il controllo dei
+    permessi si ripete ogni 10 minuti finché manca (un «sì» resta valido finché la sonda gira)."""
+    now = time.monotonic()
+    if _wdog_cap.get("why") != "" and now - _wdog_cap.get("at", -1e9) > WATCHDOG_RECHECK:
+        _wdog_cap.update(why=hw_watchdog_problem(), at=now)
+    return {"on": os.path.exists(WATCHDOG_CONF), "why": _wdog_cap["why"]}
+
+
+def hw_watchdog_set(on: bool) -> tuple[bool, str]:
+    """Accende o spegne il watchdog hardware. (riuscito, messaggio)."""
+    if MANAGED_BY:
+        return False, managed("watchdog")
+    why = hw_watchdog_problem()
+    _wdog_cap.update(why=why, at=time.monotonic())
+    if why == "device":
+        return False, "Questo dispositivo non ha un watchdog hardware utilizzabile."
+    if why in ("script", "sudo"):
+        return False, ("Serve l'aggiornamento completo della sonda (sudo bash installa-sonda.sh --aggiorna): "
+                       "manca il programma o il permesso del watchdog.")
+    try:
+        r = subprocess.run(["sudo", "-n", WATCHDOG_SCRIPT, "si" if on else "no"],
+                           capture_output=True, text=True, timeout=60)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return False, f"Watchdog non impostato: {exc}"
+    msg = (r.stdout or r.stderr or "").strip().splitlines()
+    msg = msg[-1][:300] if msg else ""
+    return r.returncode == 0, msg or ("Fatto." if r.returncode == 0 else f"codice {r.returncode}")
 
 
 # ------------------------------------------------------------------ reti Wi-Fi (NetworkManager)

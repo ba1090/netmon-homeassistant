@@ -53,6 +53,13 @@ altri dispositivi si aggiungono come per il Raspberry:
 - **Riavvio e reti Wi-Fi**: li gestisce Home Assistant (*App → NetMon sonda → Riavvia*;
   *Impostazioni → Sistema → Rete*). Nella pagina locale non ci sono *Riavvia la sonda* e *Disinstalla
   sonda*: si disinstalla l'add-on.
+- **Riavvio automatico e watchdog hardware**: sul Raspberry la sonda si riavvia da sola se per 30 minuti
+  non raggiunge né il server né Internet, e il watchdog del chip la riavvia se il sistema si blocca.
+  Nell'add-on no: riavviare la macchina vorrebbe dire riavviare tutto Home Assistant. In *Impostazioni →
+  Controlli* della pagina di stato i campi del riavvio automatico sono spenti, e il riquadro *Watchdog
+  hardware* dice che si gestisce da Home Assistant. Se la sonda si ferma, l'add-on la fa ripartire da solo
+  dopo 10 secondi; tieni attivo *Watchdog* nella scheda *Informazioni* dell'add-on, così Home Assistant fa
+  ripartire l'add-on se si blocca.
 - **Server e token** si cambiano nelle opzioni dell'add-on (il comando *Indirizzo del server* della pagina di
   stato non vale per l'add-on: le opzioni lo rimetterebbero al riavvio). Il **nome** pure; un *Rinomina* fatto
   dalla pagina di stato resta finché non cambi il nome nelle opzioni.

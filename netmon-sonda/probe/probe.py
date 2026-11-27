@@ -8,7 +8,7 @@ con cache, buffer letto e scritto a pezzi.
 Dipendenze (Debian, Raspberry Pi OS e simili): sudo apt install python3-yaml
 (fritzconnection, facoltativa, solo per il FRITZ!Box)
 """
-__version__ = "1.1.20261108-152527"
+__version__ = "1.1.20261120-120800"
 import http.client
 import fcntl
 import ipaddress
@@ -286,6 +286,9 @@ class BootWatch:
         self.state = self._load()
         found = False
         prev = self.state.get("boot")
+        # per il riassunto dell'ultimo riavvio: il sistema è ripartito? la sonda era stata fermata bene?
+        self.boot_id, self.rebooted, self.prev_clean = boot, bool(prev and prev != boot), self.state.get("clean")
+        self.power = self.power_off() if self.rebooted and self.prev_clean is False else None
         if prev and prev != boot and self.state.get("clean") is False and self.watchdog_on():
             power = self.power_off()
             if power is True:
@@ -299,6 +302,7 @@ class BootWatch:
                 found = True
                 log.warning("Avvio dopo un blocco del sistema: la sonda l'ha riavviata il watchdog hardware%s",
                             "" if power is False else " (probabile: il dispositivo non dice se è mancata la corrente)")
+        self.found = found
         self.state.update(boot=boot, clean=False)
         self._save()
         return found
@@ -314,6 +318,86 @@ class BootWatch:
         if not self.state.get("hw_at"):
             return {}
         return {"hw_wd_at": float(self.state["hw_at"]), "hw_wd_sure": bool(self.state.get("hw_sure"))}
+
+
+# ---- riassunto dell'ultimo riavvio -------------------------------------------------------------
+# Dopo ogni riavvio del sistema la sonda prepara un riassunto dell'avvio precedente: com'è finito
+# (spegnimento regolare, riavvio automatico senza server, watchdog hardware, corrente mancata, blocco) e,
+# con il programma di root netprobe-bootlog, conteggi e righe del registro di sistema. Lo manda al server
+# con i report finché il server non conferma di averlo ricevuto; la pagina lo mostra in Stato sonda.
+BOOT_SUMMARY_FILE = os.path.join(sysops.STATE_DIR, "bootsummary.json")
+NET_REBOOT_WINDOW = 900           # un riavvio automatico chiesto al massimo 15 minuti prima dell'avvio
+
+
+class BootSummary:
+    def __init__(self, path=BOOT_SUMMARY_FILE, collect=None, now=time.time):
+        self.path, self.now = path, now
+        self.collect = collect or sysops.boot_log
+        self.data = self._load()
+        self.thread = None
+
+    def _load(self):
+        try:
+            with open(self.path, encoding="utf-8") as f:
+                v = json.load(f)
+            return v if isinstance(v, dict) else {}
+        except (OSError, ValueError):
+            return {}
+
+    def _save(self):
+        try:
+            os.makedirs(os.path.dirname(self.path) or ".", exist_ok=True)
+            tmp = self.path + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(self.data, f)
+            os.replace(tmp, self.path)
+        except OSError as exc:
+            log.error("Riassunto dell'ultimo riavvio non salvato: %s", exc)
+
+    def start(self, boot, net_state=None):
+        """Dopo un riavvio del sistema (una volta per avvio) prepara il riassunto in un thread a parte."""
+        if not getattr(boot, "rebooted", False) or self.data.get("id") == getattr(boot, "boot_id", None):
+            return
+        self.thread = threading.Thread(target=self.build, args=(boot, dict(net_state or {})), daemon=True,
+                                       name="riassunto-avvio")
+        self.thread.start()
+
+    def build(self, boot, net):
+        logdata = _safe(self.collect, None)
+        if not isinstance(logdata, dict):
+            logdata = {"why": "error"}
+        try:
+            at = self.now() - boot.uptime()
+        except (OSError, ValueError, IndexError, AttributeError):
+            at = self.now()
+        try:
+            net_at = float(net.get("at") or 0)
+        except (TypeError, ValueError):
+            net_at = 0.0
+        if getattr(boot, "found", False):
+            cause = "hw" if boot.state.get("hw_sure") else "hw_probable"
+        elif net_at and 0 <= at - net_at <= NET_REBOOT_WINDOW:
+            cause = "net"
+        elif getattr(boot, "power", None) is True:
+            cause = "power"
+        elif logdata.get("clean") is True or getattr(boot, "prev_clean", None) is True:
+            cause = "clean"
+        else:
+            cause = "unknown"
+        self.data = {"id": str(boot.boot_id)[:64], "at": round(at, 1), "cause": cause, "log": logdata,
+                     "acked": False}
+        self._save()
+        log.info("Riassunto dell'ultimo riavvio pronto (motivo: %s)", cause)
+
+    def report(self):
+        if not self.data.get("id") or self.data.get("acked"):
+            return None
+        return {k: v for k, v in self.data.items() if k != "acked"}
+
+    def acked(self, ack):
+        if ack and ack == self.data.get("id") and not self.data.get("acked"):
+            self.data["acked"] = True
+            self._save()
 
 
 # ---- riavvio automatico quando il server non si raggiunge ------------------------------------
@@ -469,11 +553,11 @@ def load_config():
     cfg.setdefault("ping_count", 2)
     cfg.setdefault("ping_timeout", 1)
     cfg.setdefault("fail_threshold", 3)
-    cfg.setdefault("alert_mode", "proporzionale")
-    cfg.setdefault("stale_factor", 1.5)
+    cfg.setdefault("alert_mode", "fisso")         # le soglie valgono solo in secondi
+    cfg.setdefault("stale_factor", 1.5)           # non più usati: restano per i server vecchi
     cfg.setdefault("offline_factor", 3)
-    cfg.setdefault("stale_seconds", 90)
-    cfg.setdefault("offline_seconds", 180)
+    cfg.setdefault("stale_seconds", 120)
+    cfg.setdefault("offline_seconds", 240)
     cfg.setdefault("config_rev", 0)
     cfg.setdefault("config_poll", 60)   # ogni quanto chiedere al server se ci sono modifiche
     cfg.setdefault("fritz_enabled", False)
@@ -738,7 +822,7 @@ def server_check(url, cfg):
     except HttpError as exc:
         status = getattr(exc, "status", None)
         if status in (401, 403):
-            return False, "quel server non riconosce il token di questa sonda: prima importa lì l'utente (Esporta e Importa un utente nel pannello) oppure crea lì una sonda nuova"
+            return False, "quel server non riconosce il token di questa sonda: crea lì una sonda nuova e usa il suo token, oppure sposta tutto il server con il backup completo"
         if status == 404:
             return False, "a quell'indirizzo non risponde un server netmon"
         return False, f"server non raggiungibile ({str(exc)[:120]})"
@@ -825,7 +909,7 @@ def handle_command(requested, cfg=None):
     if requested["cmd"] == "reboot":
         ok, message = sysops.reboot(delay=3)
         cmd.update(state="done" if ok else "error", output=message, finished=time.time())
-        save_command(cmd)                              # salvato PRIMA che il sistema si riavvii
+        save_command(cmd)                              # salvato prima che il sistema si riavvii
         log.warning("Comando dal server: riavvio · %s", message)
     elif requested["cmd"] == "watchdog":
         on = requested.get("on") is True
@@ -848,7 +932,7 @@ def handle_command(requested, cfg=None):
         log.warning("Comando dal server: rete Wi-Fi (%s) · %s", cmd["action"], message)
     elif requested["cmd"] == "update":
         cmd["mode"] = "zip" if sysops.can_zipupdate() and os.path.exists(sysops.UPDATE_KEY) else "py"
-        save_command(cmd)                              # salvato PRIMA che la sonda si riavvii
+        save_command(cmd)                              # salvato prima che la sonda si riavvii
         if cfg is None:
             ok, message = False, "configurazione non disponibile"
         else:
@@ -888,7 +972,7 @@ def command_status():
         is_zip = is_update and cmd.get("mode") == "zip"         # aggiornamento completo (pacchetto)
         st = (sysops.zipupdate_status() if is_zip else sysops.selfupdate_status() if is_update
               else sysops.upgrade_status())
-        # Conta solo un esito dell'aggiornamento partito con QUESTO comando, non di uno precedente
+        # Conta solo un esito dell'aggiornamento partito con questo comando, non di uno precedente
         fresh = (st.get("started") or 0) >= cmd["started"] - 5
         if fresh and st.get("state") in ("ok", "error"):
             cmd.update(state="done" if st["state"] == "ok" else "error",
@@ -943,7 +1027,7 @@ TRUE = ("1", "true", "True", True, 1)
 def _safe(fn, default=None):
     try:
         return fn()
-    except Exception:  # noqa: BLE001 — un singolo dato mancante non deve bloccare il resto
+    except Exception:  # noqa: BLE001 (un singolo dato mancante non deve bloccare il resto)
         return default
 
 
@@ -954,7 +1038,7 @@ def _soft(fn, default=None):
         return fn()
     except OSError:
         raise
-    except Exception:  # noqa: BLE001 — azione non supportata da questo FRITZ!OS
+    except Exception:  # noqa: BLE001 (azione non supportata da questo FRITZ!OS)
         return default
 
 
@@ -998,9 +1082,9 @@ def parse_mesh(topo, by_mac=None):
     """Riassunto della mappa mesh del FRITZ!Box: i nodi (FRITZ!Box principale e repeater) con il
     collegamento verso il nodo da cui dipendono e i dispositivi agganciati a ciascuno.
     Velocità in kbit/s (come nel FRITZ!OS), segnale in dBm se il FRITZ lo misura.
-    Ogni campo è facoltativo: un FRITZ!OS diverso non deve far fallire il resto.
+    Ogni campo è facoltativo, così un FRITZ!OS diverso non fa fallire il resto.
     by_mac (dict, facoltativo): riempito con MAC -> nodo, banda, segnale e velocità di ogni
-    dispositivo, per l'elenco dei dispositivi in rete. Resta sulla sonda: i MAC non si inviano."""
+    dispositivo, per l'elenco dei dispositivi in rete. Resta sulla sonda e i MAC non vengono inviati."""
     nodes = {n.get("uid"): n for n in (topo or {}).get("nodes") or [] if isinstance(n, dict) and n.get("uid")}
     iface_of = {}                                         # uid interfaccia -> (uid nodo, interfaccia)
     for uid, n in nodes.items():
@@ -1313,7 +1397,7 @@ class Fritz:
                 else self._guests(fc, data.get("wlans"), mono)
         except OSError:
             raise
-        except Exception as exc:  # noqa: BLE001 — rete ospiti assente o non leggibile
+        except Exception as exc:  # noqa: BLE001 (rete ospiti assente o non leggibile)
             data["guests_error"] = str(exc)[:200]
         # Mappa mesh e fibra: ogni MESH_EVERY secondi, e solo allora nel report (il server tiene
         # l'ultima ricevuta): la mappa pesa qualche kB, inutile rimandarla a ogni controllo.
@@ -1326,7 +1410,7 @@ class Fritz:
                     data["mesh"] = mesh
             except OSError:
                 raise
-            except Exception as exc:  # noqa: BLE001 — FRITZ!OS senza mesh o formato diverso
+            except Exception as exc:  # noqa: BLE001 (FRITZ!OS senza mesh o formato diverso)
                 log.info("Mappa mesh del FRITZ!Box non disponibile: %s", exc)
             # dispositivi in rete: l'elenco del FRITZ!Box completato con la mesh (anche senza mesh)
             if self.host_list:
@@ -1382,7 +1466,7 @@ class Fritz:
                     "lan": sum(1 for h in active if str(h.get("InterfaceType", "")).lower() == "ethernet")}
         except OSError:
             raise
-        except Exception:  # noqa: BLE001 — FRITZ!OS vecchi: una richiesta per dispositivo
+        except Exception:  # noqa: BLE001 (FRITZ!OS vecchi: una richiesta per dispositivo)
             with self.lock:
                 hosts = FritzHosts(fc).get_hosts_info()
             self.host_list = hosts
@@ -1439,7 +1523,7 @@ class Fritz:
                       for h in infos if h.get("mac") and h.get("status", True) in TRUE]
         except OSError:
             raise
-        except Exception:  # noqa: BLE001 — versione della libreria o del FRITZ!OS diversa
+        except Exception:  # noqa: BLE001 (versione della libreria o del FRITZ!OS diversa)
             guests = None
         if guests is None:
             with self.lock:
@@ -1937,12 +2021,8 @@ def urlsplit_host(url):
 
 
 def thresholds(cfg):
-    """Soglie inviate al server: proporzionali all'intervallo oppure fisse in secondi."""
-    if cfg["alert_mode"] == "fisso":
-        stale, offline = cfg["stale_seconds"], cfg["offline_seconds"]
-    else:
-        stale = cfg["interval"] * float(cfg["stale_factor"])
-        offline = cfg["interval"] * float(cfg["offline_factor"])
+    """Soglie inviate al server, in secondi: sonda in ritardo e sonda irraggiungibile (avviso critico)."""
+    stale, offline = cfg["stale_seconds"], cfg["offline_seconds"]
     return {"fail_threshold": int(cfg["fail_threshold"]),
             "stale": round(stale, 1), "offline": round(offline, 1)}
 
@@ -1992,7 +2072,7 @@ LOG_OK_EVERY = 3600    # con tutto invariato, una riga "OK" nel registro all'ora
 # speed.cloudflare.com nel browser): latenza, download e upload con più connessioni in parallelo,
 # ognuna limitata nel tempo e nei byte. Solo libreria standard: niente programmi da installare.
 # Parte alla fine del ciclo dei ping e il risultato viaggia con il report di quel ciclo.
-# La velocità si calcola DOPO i primi secondi: all'inizio le connessioni TCP accelerano (slow start) e
+# La velocità si calcola dopo i primi secondi: all'inizio le connessioni TCP accelerano (slow start) e
 # contarli abbasserebbe il risultato, soprattutto sulle linee veloci. Il tetto ai byte cresce con la
 # velocità misurata, perché una linea veloce non esaurisca il budget proprio durante l'accelerazione.
 SPEED_HOST = "speed.cloudflare.com"
@@ -2160,7 +2240,7 @@ def run_speedtest():
 
 
 # ---------------------------------------------------------------- controllo di sicurezza (porte aperte)
-# Chiesto dalla pagina (o una volta al giorno dal server) per UN dispositivo della rete di casa.
+# Chiesto dalla pagina (o una volta al giorno dal server) per un dispositivo della rete di casa.
 # Solo indirizzi privati: la sonda non scansiona mai Internet, qualunque cosa chieda il server.
 # Connessioni TCP normali, poche alla volta e con pause brevi, perché alcuni dispositivi IoT economici
 # si bloccano con le scansioni aggressive. Sui servizi trovati solo domande innocue (intestazione,
@@ -2582,6 +2662,9 @@ def main():
             signal.signal(signum, signal.SIG_DFL)
             os.kill(os.getpid(), signum)
         signal.signal(signal.SIGTERM, stopped)
+    summary = BootSummary()              # riassunto dell'avvio precedente, una volta per riavvio
+    if not sysops.MANAGED_BY:
+        _safe(lambda: summary.start(boot, watchdog.state), None)
     dup_error = False                    # il server rifiuta i dati: token usato da un altro dispositivo
     server_error_set(None)
     last_down, last_ok_log, sent_once = None, 0.0, False
@@ -2643,6 +2726,8 @@ def main():
         if isinstance(payload["system"], dict):
             payload["system"].update(watchdog.report())
             payload["system"].update(boot.report())
+        if bs := _safe(summary.report, None):
+            payload["boot_summary"] = bs
         status_cmd = _safe(command_status, None)
         if status_cmd:
             payload["command_status"] = status_cmd
@@ -2678,6 +2763,7 @@ def main():
                 sent_once = True
                 log.info("Primo invio al server riuscito")
             command_acked(reply.get("command_ack"))
+            summary.acked(reply.get("boot_summary_ack"))
             handle_command(reply.get("command"), cfg)
             speedtest_requested(reply.get("speedtest"))
             scan_acked(reply.get("scan_ack"))

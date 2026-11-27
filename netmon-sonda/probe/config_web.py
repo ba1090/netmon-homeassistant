@@ -16,7 +16,7 @@
 
 Dipendenze: python3-yaml (già installato per la sonda).
 """
-__version__ = "1.1.20261120-120800"
+__version__ = "1.1.20261127-220041"
 import base64
 import hmac
 import ipaddress

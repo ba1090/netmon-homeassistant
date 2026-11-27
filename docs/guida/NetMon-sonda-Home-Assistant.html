@@ -44,7 +44,7 @@
 <section class="page cover">
   <img src="../img/logo.png" alt="NetMon">
   <h1>Installare la sonda NetMon<br>su Home Assistant</h1>
-  <p class="sub">Guida passo passo, con le schermate · versione 1.1.20261108-152527</p>
+  <p class="sub">Guida passo passo, con le schermate · versione 1.1.20261120-120800</p>
   <div class="box">
     <p>La sonda di NetMon gira dentro Home Assistant come <b>app</b> (add-on), al posto del Raspberry Pi: fa i ping
       ai dispositivi di casa, legge il FRITZ!Box (anche l'elenco dei dispositivi in rete), fa gli speedtest (anche
@@ -228,6 +228,9 @@
       riavvio automatico sono spenti e il riquadro <i>Watchdog hardware</i> di <i>Stato sonda</i> dice che si gestisce da
       Home Assistant. Se la sonda si ferma, l'app la fa ripartire dopo 10 secondi; con <i>Watchdog</i> attivo (passo 7)
       Home Assistant fa ripartire l'app se si blocca.</li>
+    <li><b>Riassunto dell'ultimo riavvio</b>: sul Raspberry Pi, dopo ogni riavvio, la sonda manda una volta il riassunto
+      dell'avvio precedente (motivo e problemi trovati nel registro di sistema), che si vede in <i>Stato sonda → Ultimo
+      riavvio</i>. Nell'app non lo manda: il sistema è quello di Home Assistant, e i suoi registri sono in Home Assistant.</li>
     <li><b>Server, token e nome</b> si cambiano nella scheda <i>Configurazione</i> dell'app. Il comando <i>Indirizzo del
       server</i> di <i>Impostazioni → Sonde</i> non vale per questa sonda: la pagina di stato lo dice e rimanda all'app. Un
       <i>Rinomina</i> fatto dalla pagina di stato resta finché non cambi il nome lì.</li>

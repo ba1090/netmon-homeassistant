@@ -5,7 +5,7 @@ La sonda gira come utente senza privilegi: i tre comandi sono consentiti da
 separata (systemd-run), così non vengono interrotti se il servizio della sonda si riavvia.
 
 Aggiornamento di netmon: la sonda scarica dal server (con il suo token) i propri programmi
-nella versione del server, ne controlla le impronte e la FIRMA (chiave pubblica ricevuta
+nella versione del server, ne controlla le impronte e la firma (chiave pubblica ricevuta
 all'installazione, in UPDATE_KEY) e li prepara in STATE_DIR/update; poi
 /usr/local/sbin/netprobe-selfupdate (root) li ricontrolla con la stessa chiave, li installa in
 /opt/netprobe, riavvia la sonda e, se non riparte, rimette i file precedenti.
@@ -18,7 +18,7 @@ installa-sonda.sh --aggiorna. Con un server vecchio si usa l'aggiornamento dei s
 Log e stato degli aggiornamenti li scrive root in SYS_DIR (cartella di root, qui solo letta):
 nella cartella della sonda, scrivibile dal servizio, root non scrive più nulla.
 """
-__version__ = "1.1.20261108-152527"
+__version__ = "1.1.20261120-120800"
 import base64
 import hashlib
 import json
@@ -553,6 +553,34 @@ def hw_watchdog_set(on: bool) -> tuple[bool, str]:
     msg = (r.stdout or r.stderr or "").strip().splitlines()
     msg = msg[-1][:300] if msg else ""
     return r.returncode == 0, msg or ("Fatto." if r.returncode == 0 else f"codice {r.returncode}")
+
+
+# ------------------------------------------------------------------ riassunto dell'ultimo riavvio
+# Lo prepara /usr/local/sbin/netprobe-bootlog (root, via sudo solo senza argomenti) dal registro di
+# sistema: la sonda riceve solo il riassunto filtrato, non tutto il registro.
+BOOTLOG_SCRIPT = "/usr/local/sbin/netprobe-bootlog"
+BOOTLOG_MAX = 256 * 1024
+
+
+def boot_log() -> dict:
+    """Riassunto dell'avvio precedente, oppure {"why": motivo} se non si può leggere."""
+    if MANAGED_BY:
+        return {"why": "managed"}
+    if not os.path.exists(BOOTLOG_SCRIPT):
+        return {"why": "script"}
+    if not can_sudo([BOOTLOG_SCRIPT]):
+        return {"why": "sudo"}
+    try:
+        r = subprocess.run(["sudo", "-n", BOOTLOG_SCRIPT], capture_output=True, text=True, timeout=180)
+    except (OSError, subprocess.TimeoutExpired):
+        return {"why": "error"}
+    if r.returncode != 0 or len(r.stdout) > BOOTLOG_MAX:
+        return {"why": "error"}
+    try:
+        data = json.loads(r.stdout or "{}")
+    except ValueError:
+        return {"why": "error"}
+    return data if isinstance(data, dict) else {"why": "error"}
 
 
 # ------------------------------------------------------------------ reti Wi-Fi (NetworkManager)

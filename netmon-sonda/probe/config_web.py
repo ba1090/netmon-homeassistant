@@ -16,7 +16,7 @@
 
 Dipendenze: python3-yaml (già installato per la sonda).
 """
-__version__ = "1.1.20261108-152527"
+__version__ = "1.1.20261120-120800"
 import base64
 import hmac
 import ipaddress
@@ -181,8 +181,8 @@ log = logging.getLogger("config-web")
 # Valori usati quando config.yaml non contiene ancora la voce (stessi della sonda)
 DEFAULTS = {"config_rev": 0, "config_poll": 60, "traffic_interval": 30, "ping_parallel": 2, "fritz_enabled": False, "fritz_host": "",
             "fritz_user": "", "fritz_password": "", "fritz_more": [], "fritz_max": 4, "devices_max": 30, "interval": 60, "ping_count": 2, "ping_timeout": 1, "fail_threshold": 3,
-            "alert_mode": "proporzionale", "stale_factor": 1.5, "offline_factor": 3,
-            "stale_seconds": 90, "offline_seconds": 180, "net_reboot": 30, "net_reboot_max": 1,
+            "alert_mode": "fisso", "stale_factor": 1.5, "offline_factor": 3,
+            "stale_seconds": 120, "offline_seconds": 240, "net_reboot": 30, "net_reboot_max": 1,
             "net_reboot_lan": True}
 
 NUMERIC_LABELS = {"config_poll": "Controllo configurazioni dal server",
@@ -328,7 +328,7 @@ def validate(data, current=None):
         "server_url": str(data.get("server_url", "")).strip(),
         "token": str(data.get("token", "")).strip(),
         "probe_name": str(data.get("probe_name", "")).strip(),
-        "alert_mode": str(data.get("alert_mode", base.get("alert_mode", "proporzionale"))).strip(),
+        "alert_mode": "fisso",                       # le soglie valgono solo in secondi
         "fritz_enabled": bool(data.get("fritz_enabled", base.get("fritz_enabled", False))),
         "fritz_host": str(data.get("fritz_host", base.get("fritz_host", ""))).strip(),
         "fritz_user": str(data.get("fritz_user", base.get("fritz_user", ""))).strip(),
@@ -381,20 +381,12 @@ def validate(data, current=None):
     if not 1 <= cfg["ping_timeout"] <= 10:
         errors.append("L'attesa per ogni pacchetto deve essere tra 1 e 10 secondi.")
 
-    if cfg["alert_mode"] not in ("proporzionale", "fisso"):
-        errors.append("Modalità degli alert non valida.")
     if not 1 <= cfg["fail_threshold"] <= 20:
         errors.append("I controlli falliti prima dell'alert devono essere tra 1 e 20.")
-    if cfg["alert_mode"] == "proporzionale":
-        if not 1 <= cfg["stale_factor"] <= 20 or not 1 <= cfg["offline_factor"] <= 20:
-            errors.append("I moltiplicatori devono essere tra 1 e 20.")
-        elif cfg["stale_factor"] > cfg["offline_factor"]:
-            errors.append("La soglia «in ritardo» deve essere minore di quella «irraggiungibile».")
-    else:
-        if not 10 <= cfg["stale_seconds"] <= 86400 or not 10 <= cfg["offline_seconds"] <= 86400:
-            errors.append("Le soglie fisse devono essere tra 10 e 86400 secondi.")
-        elif cfg["stale_seconds"] > cfg["offline_seconds"]:
-            errors.append("La soglia «in ritardo» deve essere minore di quella «irraggiungibile».")
+    if not 10 <= cfg["stale_seconds"] <= 86400 or not 10 <= cfg["offline_seconds"] <= 86400:
+        errors.append("Le soglie della sonda devono essere tra 10 e 86400 secondi.")
+    elif cfg["stale_seconds"] > cfg["offline_seconds"]:
+        errors.append("La soglia «in ritardo» deve essere minore di quella «irraggiungibile».")
 
     devices = {}
     for i, d in enumerate(data.get("devices") or [], start=1):
@@ -844,7 +836,7 @@ class Handler(BaseHTTPRequestHandler):
             ok, message = sysops.reboot(delay=3)
             log.warning("Riavvio richiesto dalla pagina locale: %s", message)
             return self.send_json({"ok": ok, "message": message}, 200 if ok else 409)
-        # Gli aggiornamenti (netmon e sistema operativo) si comandano SOLO dal pannello di
+        # Gli aggiornamenti (netmon e sistema operativo) si comandano solo dal pannello di
         # amministrazione del server: da qui non si avviano. La sonda li esegue quando il server
         # glieli ordina (probe.handle_command), e questa pagina ne mostra solo stato e registro.
 
